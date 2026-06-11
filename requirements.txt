@@ -1,0 +1,9 @@
+torch
+torch-geometric
+xgboost
+uproot
+awkward
+numpy
+matplotlib
+scipy
+tqdm
