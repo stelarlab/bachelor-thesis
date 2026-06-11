@@ -1,0 +1,249 @@
+"""Train the strip self-attention GNN for position reconstruction.
+
+This script covers all GNN variants through CLI flags:
+  --tc-anchor     use TC-centroid anchor instead of median(x)
+  --data A B ...  one file = single-domain; multiple files = multi-domain training
+  --train-all     merge train+val splits for the final model (test set untouched)
+
+Output files (all under outputs/):
+  <prefix>_model.pt       model weights
+  <prefix>_norm.json      normalization statistics
+  <prefix>_predictions.npz  y_pred, y_true, domain labels, training history
+
+Example — single domain, TC-anchor:
+  python train_gnn.py --data Data_100ns.root --tc-anchor --out-prefix gnn_tc
+
+Example — multi-domain:
+  python train_gnn.py --data Data_100ns.root Data_200ns.root --out-prefix gnn_multidomain
+"""
+from __future__ import annotations
+
+import argparse
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, ConcatDataset
+from tqdm import tqdm
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from data_loader import load_events, learn_frame_transform, load_detector_shift
+from dataset import HitDataset, Normalization, collate_padded
+from model import StripModel
+
+MAX_NHITS_TRAIN = 50   # drop extreme-multiplicity events from training (Fabian, group meeting)
+
+ROOT = Path(__file__).resolve().parent
+OUT  = ROOT / "outputs"; OUT.mkdir(exist_ok=True)
+
+def _resolve_device(choice: str) -> torch.device:
+    """Pick compute device; fall back to CPU if CUDA build doesn’t support the GPU."""
+    if choice == "cpu":
+        return torch.device("cpu")
+    if choice == "mps" or (choice == "auto" and
+            torch.backends.mps.is_available() and not torch.cuda.is_available()):
+        print("[GNN] device = MPS (Apple Silicon)", flush=True)
+        return torch.device("mps")
+    if torch.cuda.is_available():
+        try:
+            cap = torch.cuda.get_device_capability(0)
+            sm  = f"sm_{cap[0]}{cap[1]}"
+            if sm not in torch.cuda.get_arch_list() and choice == "auto":
+                print(f"[GNN] GPU {torch.cuda.get_device_name(0)} ({sm}) not supported — falling back to CPU.", flush=True)
+                return torch.device("cpu")
+        except Exception as exc:
+            print(f"[GNN] CUDA check failed ({exc}) — using CPU.", flush=True)
+            return torch.device("cpu")
+        return torch.device("cuda")
+    return torch.device("cpu")
+
+def main():
+    p = argparse.ArgumentParser(description="Train strip self-attention GNN.")
+    p.add_argument("--data",         type=str, nargs="+", required=True,
+                   help="Path(s) to .root file(s). Multiple = multi-domain training.")
+    p.add_argument("--out-prefix",   type=str, default="gnn")
+    p.add_argument("--epochs",       type=int,   default=30)
+    p.add_argument("--batch-size",   type=int,   default=512)
+    p.add_argument("--lr",           type=float, default=3e-4)
+    p.add_argument("--weight-decay", type=float, default=1e-4)
+    p.add_argument("--d-model",      type=int,   default=64)
+    p.add_argument("--n-heads",      type=int,   default=4)
+    p.add_argument("--n-layers",     type=int,   default=2)
+    p.add_argument("--dropout",      type=float, default=0.1)
+    p.add_argument("--seed",         type=int,   default=42)
+    p.add_argument("--num-workers",  type=int,   default=4)
+    p.add_argument("--device",       choices=["auto","cuda","mps","cpu"], default="auto")
+    p.add_argument("--tmax",         type=float, default=100.0,
+                   help="Shaping time [ns] of the dataset. Single-domain only.")
+    p.add_argument("--theta",        type=float, default=29.0,
+                   help="Track incidence angle [deg].")
+    p.add_argument("--tc-anchor",    action="store_true",
+                   help="Use TC-centroid as anchor (better empirically; default: median).")
+    p.add_argument("--train-all",    action="store_true",
+                   help="Train on train+val; keep 5%% as internal mini-val for model selection.")
+    p.add_argument("--patience",     type=int, default=10,
+                   help="Early-stopping patience in epochs.")
+    args = p.parse_args()
+
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+
+    detector_shift = load_detector_shift(OUT)
+    if detector_shift != 0.0:
+        print(f"[GNN] detector shift (phase 0): {detector_shift*1000:+.1f} um", flush=True)
+
+    all_ev, all_a, all_b, splits = [], [], [], []
+    for path_str in args.data:
+        data_path = Path(path_str)
+        print(f"[GNN] loading: {data_path.name}", flush=True)
+        ev = load_events(data_path)
+        a, b = learn_frame_transform(ev)
+        print(f"[GNN]   frame transform: a={a:.6f}  b={b:+.4f}", flush=True)
+        all_ev.append(ev); all_a.append(a); all_b.append(b)
+
+        valid_idx = np.where(ev.n_hits > 0)[0]
+        rng  = np.random.default_rng(args.seed)
+        perm = rng.permutation(len(valid_idx))
+        n_tr = int(0.70 * len(valid_idx))
+        n_va = int(0.15 * len(valid_idx))
+
+        if args.train_all:
+            trva = valid_idx[perm[:n_tr + n_va]]
+            n_mini = max(int(0.05 * len(trva)), 1)
+            tr_idx = trva[n_mini:]
+            va_idx = trva[:n_mini]   # 5% internal mini-val; test set never touched
+        else:
+            tr_idx = valid_idx[perm[:n_tr]]
+            va_idx = valid_idx[perm[n_tr:n_tr + n_va]]
+        te_idx = valid_idx[perm[n_tr + n_va:]]
+
+        # Outlier cut on train/val only — test set keeps full distribution
+        tr_idx = tr_idx[ev.n_hits[tr_idx] <= MAX_NHITS_TRAIN]
+        va_idx = va_idx[ev.n_hits[va_idx] <= MAX_NHITS_TRAIN]
+        splits.append({"train": tr_idx, "val": va_idx, "test": te_idx})
+        print(f"[GNN]   train={len(tr_idx)}  val={len(va_idx)}  test={len(te_idx)}", flush=True)
+
+    if len(all_ev) > 1:
+        norm = Normalization.from_datasets(
+            [(ev, sp["train"]) for ev, sp in zip(all_ev, splits)],
+            theta_deg=args.theta)
+        print(f"[GNN] multi-domain normalization (tmax=-1)", flush=True)
+    else:
+        norm = Normalization.from_arrays(
+            all_ev[0], train_idx=splits[0]["train"],
+            theta_deg=args.theta, tmax_ns=args.tmax)
+    anchor_name = "TC-centroid" if args.tc_anchor else "median(x)"
+    print(f"[GNN] anchor: {anchor_name}  theta={args.theta}deg", flush=True)
+
+    domain_test = np.concatenate([
+        np.full(len(sp["test"]), d, dtype=np.int32) for d, sp in enumerate(splits)
+    ])
+
+    def make_ds(split_key):
+        return ConcatDataset([
+            HitDataset(ev, sp[split_key], a, b, norm,
+                       detector_shift_mm=detector_shift, tc_anchor=args.tc_anchor)
+            for ev, sp, a, b in zip(all_ev, splits, all_a, all_b)
+        ])
+
+    dl_tr = DataLoader(make_ds("train"), batch_size=args.batch_size,     shuffle=True,
+                       collate_fn=collate_padded, num_workers=args.num_workers, pin_memory=True)
+    dl_va = DataLoader(make_ds("val"),   batch_size=2*args.batch_size,   shuffle=False,
+                       collate_fn=collate_padded, num_workers=args.num_workers, pin_memory=True)
+    dl_te = DataLoader(make_ds("test"),  batch_size=2*args.batch_size,   shuffle=False,
+                       collate_fn=collate_padded, num_workers=args.num_workers, pin_memory=True)
+
+    device = _resolve_device(args.device)
+    print(f"[GNN] device = {device}", flush=True)
+    model = StripModel(n_strip_feats=5, d_model=args.d_model, n_heads=args.n_heads,
+                       n_layers=args.n_layers, dropout=args.dropout).to(device)
+    print(f"[GNN] parameters: {sum(p.numel() for p in model.parameters()):,}", flush=True)
+
+    optim   = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    cosine  = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=max(args.epochs-10, 1))
+    warmup  = torch.optim.lr_scheduler.LinearLR(optim, start_factor=0.1, end_factor=1.0, total_iters=10)
+    sched   = torch.optim.lr_scheduler.SequentialLR(optim, [warmup, cosine], milestones=[10])
+    huber   = nn.HuberLoss(delta=0.2)   # delta=0.2 in 5mm units ≈ 1mm threshold
+
+    best_val, best_state, best_ep = float("inf"), None, -1
+    no_improve = 0
+    history = []
+
+    for ep in range(args.epochs):
+        t0 = time.time()
+        model.train(); tr_loss = 0.0; n = 0
+        for batch in tqdm(dl_tr, desc=f"ep {ep:2d} train", ncols=100, leave=False):
+            for k in ("strip_feats", "mask", "global_feats", "label_local"):
+                batch[k] = batch[k].to(device, non_blocking=True)
+            pred = model(batch["strip_feats"], batch["mask"], batch["global_feats"])
+            loss = huber(pred, batch["label_local"])
+            optim.zero_grad(); loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optim.step()
+            bs = batch["strip_feats"].size(0)
+            tr_loss += loss.item() * bs; n += bs
+        tr_loss /= max(n, 1)
+
+        model.eval(); va_loss = 0.0; n = 0; sq = 0.0
+        with torch.no_grad():
+            for batch in tqdm(dl_va, desc=f"ep {ep:2d} val  ", ncols=100, leave=False):
+                for k in ("strip_feats", "mask", "global_feats", "label_local", "x_med", "label_xpos"):
+                    batch[k] = batch[k].to(device, non_blocking=True)
+                pred      = model(batch["strip_feats"], batch["mask"], batch["global_feats"])
+                va_loss  += huber(pred, batch["label_local"]).item() * batch["strip_feats"].size(0)
+                pred_xpos = pred * 5.0 + batch["x_med"]
+                sq       += ((pred_xpos - batch["label_xpos"]) ** 2).sum().item()
+                n        += batch["strip_feats"].size(0)
+        va_loss /= max(n, 1)
+        rms_um   = float(np.sqrt(sq / max(n, 1))) * 1000.0
+        sched.step()
+
+        history.append((ep, tr_loss, va_loss, rms_um))
+        print(f"  ep {ep:2d}: train={tr_loss:.4f}  val={va_loss:.4f}  val_RMS={rms_um:.0f}um  "
+              f"({time.time()-t0:.1f}s)", flush=True)
+
+        if va_loss < best_val - 1e-5:
+            best_val, best_ep = va_loss, ep
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            no_improve = 0
+        else:
+            no_improve += 1
+        if no_improve >= args.patience:
+            print(f"[GNN] early stopping at epoch {ep+1}", flush=True)
+            break
+
+    model.load_state_dict(best_state)
+    print(f"[GNN] best epoch = {best_ep}  val = {best_val:.4f}", flush=True)
+
+    model.eval()
+    preds_xpos, label_xpos, track_icepts = [], [], []
+    with torch.no_grad():
+        for batch in tqdm(dl_te, desc="test", ncols=100):
+            for k in ("strip_feats", "mask", "global_feats", "x_med"):
+                batch[k] = batch[k].to(device, non_blocking=True)
+            pred = model(batch["strip_feats"], batch["mask"], batch["global_feats"])
+            preds_xpos.append((pred * 5.0 + batch["x_med"]).cpu().numpy())
+            label_xpos.append(batch["label_xpos"].numpy())
+            track_icepts.append(batch["track_icept"].numpy())
+
+    preds_xpos   = np.concatenate(preds_xpos)
+    track_icepts = np.concatenate(track_icepts)
+    # Back-transform to tracker frame using the correct a/b per domain
+    _a = np.array(all_a); _b = np.array(all_b)
+    preds_track  = preds_xpos * _a[domain_test] + _b[domain_test]
+
+    npz_path  = OUT / f"{args.out_prefix}_predictions.npz"
+    pt_path   = OUT / f"{args.out_prefix}_model.pt"
+    norm_path = OUT / f"{args.out_prefix}_norm.json"
+    np.savez_compressed(npz_path, y_pred=preds_track, y_true=track_icepts,
+                        domain=domain_test, history=np.array(history))
+    torch.save(model.state_dict(), pt_path)
+    norm.save(norm_path)
+    print(f"[GNN] saved: {npz_path.name}  {pt_path.name}  {norm_path.name}", flush=True)
+
+if __name__ == "__main__":
+    main()
