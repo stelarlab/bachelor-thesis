@@ -37,7 +37,7 @@ from model import StripModel
 
 MAX_NHITS_TRAIN = 50   # drop extreme-multiplicity events from training (Fabian, group meeting)
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]   # repo root (pipeline/ is one level down)
 OUT  = ROOT / "outputs"; OUT.mkdir(exist_ok=True)
 
 def _resolve_device(choice: str) -> torch.device:
@@ -188,7 +188,10 @@ def main():
             tr_loss += loss.item() * bs; n += bs
         tr_loss /= max(n, 1)
 
-        model.eval(); va_loss = 0.0; n = 0; sq = 0.0
+        # Validation: Huber loss + ML metrics (MSE/RMSE/MAE/R2) on the xpos scale.
+        # sq/abs/sy/syy are accumulated so R2 can be computed without storing all
+        # predictions (ss_tot = sum(y^2) - n*mean(y)^2).
+        model.eval(); va_loss = 0.0; n = 0; sq = 0.0; sab = 0.0; sy = 0.0; syy = 0.0
         with torch.no_grad():
             for batch in tqdm(dl_va, desc=f"ep {ep:2d} val  ", ncols=100, leave=False):
                 for k in ("strip_feats", "mask", "global_feats", "label_local", "x_med", "label_xpos"):
@@ -196,15 +199,25 @@ def main():
                 pred      = model(batch["strip_feats"], batch["mask"], batch["global_feats"])
                 va_loss  += huber(pred, batch["label_local"]).item() * batch["strip_feats"].size(0)
                 pred_xpos = pred * 5.0 + batch["x_med"]
-                sq       += ((pred_xpos - batch["label_xpos"]) ** 2).sum().item()
+                y_true    = batch["label_xpos"]
+                err       = pred_xpos - y_true
+                sq       += (err ** 2).sum().item()
+                sab      += err.abs().sum().item()
+                sy       += y_true.sum().item()
+                syy      += (y_true ** 2).sum().item()
                 n        += batch["strip_feats"].size(0)
         va_loss /= max(n, 1)
-        rms_um   = float(np.sqrt(sq / max(n, 1))) * 1000.0
+        nn_      = max(n, 1)
+        mse_um2  = (sq / nn_) * 1e6                       # mm^2 -> um^2
+        rms_um   = float(np.sqrt(sq / nn_)) * 1000.0      # = RMSE
+        mae_um   = (sab / nn_) * 1000.0
+        ss_tot   = syy - sy * sy / nn_                    # sum((y-ybar)^2) in mm^2
+        r2       = 1.0 - sq / ss_tot if ss_tot > 1e-12 else float("nan")
         sched.step()
 
-        history.append((ep, tr_loss, va_loss, rms_um))
-        print(f"  ep {ep:2d}: train={tr_loss:.4f}  val={va_loss:.4f}  val_RMS={rms_um:.0f}um  "
-              f"({time.time()-t0:.1f}s)", flush=True)
+        history.append((ep, tr_loss, va_loss, rms_um, mse_um2, mae_um, r2))
+        print(f"  ep {ep:2d}: train={tr_loss:.4f}  val={va_loss:.4f}  RMSE={rms_um:.0f}um  "
+              f"MAE={mae_um:.0f}um  R²={r2:.4f}  ({time.time()-t0:.1f}s)", flush=True)
 
         if va_loss < best_val - 1e-5:
             best_val, best_ep = va_loss, ep
