@@ -1,6 +1,6 @@
 """Feature correlation analysis and XGBoost importance plots.
 
-Ausgabe:
+Outputs:
     outputs/plots/feature_importance_gain.png
     outputs/plots/feature_importance_weight.png
     outputs/plots/feature_importance_cover.png
@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from data_loader import load_events, learn_frame_transform, load_detector_shift
 from features import FEATURES, build_features
 
-ROOT  = Path(__file__).resolve().parent
+ROOT  = Path(__file__).resolve().parents[1]   # repo root (pipeline/ is one level down)
 OUT   = ROOT / "outputs"
 PLOTS = OUT / "plots"
 PLOTS.mkdir(exist_ok=True)
@@ -39,7 +39,7 @@ def main():
     detector_shift = load_detector_shift(OUT)
     X, y, mask, _ = build_features(ev, a, b, detector_shift_mm=detector_shift)
     X_valid = X[mask]
-    print(f"[ANALYSE] {mask.sum()} gueltige Events, {len(FEATURES)} Features", flush=True)
+    print(f"[ANALYSE] {mask.sum()} valid events, {len(FEATURES)} features", flush=True)
 
     df = pd.DataFrame(X_valid, columns=FEATURES)
     corr = df.corr()
@@ -54,16 +54,16 @@ def main():
     to_remove = list(dict.fromkeys([f2 for _, f2, _ in redundant]))
 
     txt_path = OUT / "feature_analysis.txt"
-    with open(txt_path, "w") as f:
-        f.write(f"Feature-Korrelationsanalyse (Threshold={CORR_THRESHOLD})\n")
-        f.write(f"Events: {mask.sum()}, Features: {len(FEATURES)}\n\n")
-        f.write(f"Hochkorrelierte Paare (|r| > {CORR_THRESHOLD}):\n")
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(f"Feature correlation analysis (threshold={CORR_THRESHOLD})\n")
+        f.write(f"Events: {mask.sum()}, features: {len(FEATURES)}\n\n")
+        f.write(f"Highly correlated pairs (|r| > {CORR_THRESHOLD}):\n")
         for f1, f2, r in redundant:
             f.write(f"  r={r:+.3f}  {f1}  <->  {f2}\n")
-        f.write(f"\nEmpfehlung entfernen:\n")
+        f.write(f"\nRecommended to remove:\n")
         for feat in to_remove:
             f.write(f"  - {feat}\n")
-    print(f"[ANALYSE] {len(redundant)} redundante Paare -> {txt_path}", flush=True)
+    print(f"[ANALYSE] {len(redundant)} redundant pairs -> {txt_path}", flush=True)
 
     fig, ax = plt.subplots(figsize=(14, 12))
     im = ax.imshow(corr.values, vmin=-1, vmax=1, cmap="RdBu_r", aspect="auto")
@@ -72,7 +72,7 @@ def main():
     ax.set_xticklabels(FEATURES, rotation=90, fontsize=7)
     ax.set_yticklabels(FEATURES, fontsize=7)
     plt.colorbar(im, ax=ax, label="Pearson r")
-    ax.set_title("Feature-Korrelationsmatrix (XGBoost, 100ns)")
+    ax.set_title("feature correlation matrix (XGBoost, 100ns)")
     plt.tight_layout()
     plt.savefig(PLOTS / "feature_correlation.png", dpi=150)
     plt.close()
@@ -93,14 +93,14 @@ def main():
             plt.tight_layout()
             plt.savefig(PLOTS / f"feature_importance_{imp_type}.png", dpi=150)
             plt.close()
-        print(f"[ANALYSE] Importance Plots -> {PLOTS}/", flush=True)
+        print(f"[ANALYSE] importance plots -> {PLOTS}/", flush=True)
     else:
-        print("[ANALYSE] kein xgb_model.json, ueberspringe Importance.", flush=True)
+        print("[ANALYSE] no xgb_model.json, skipping importance.", flush=True)
 
-    print("\n[ANALYSE] Redundante Paare:")
+    print("\n[ANALYSE] redundant pairs:")
     for f1, f2, r in redundant:
         print(f"  r={r:+.3f}  {f1}  <->  {f2}")
-    print(f"\n[ANALYSE] Empfehlung entfernen ({len(to_remove)}): {to_remove}")
+    print(f"\n[ANALYSE] recommended to remove ({len(to_remove)}): {to_remove}")
 
 if __name__ == "__main__":
     main()
