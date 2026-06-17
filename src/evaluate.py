@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fits import fit_residuals
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]   # repo root (src/ is one level down)
 DATA = ROOT / "Data_for_Roman_29deg_530V_100ns_x9.root"
 OUT  = ROOT / "outputs"
 
@@ -44,6 +44,26 @@ def print_domain_rows(stem, res, qc, domain):
         fr = fit_residuals(r[q], fit_range_mm=0.5)
         lbl = _DOMAIN_LABELS[d_idx] if d_idx < len(_DOMAIN_LABELS) else f"domain_{d_idx}"
         print_row(f"  GNN ({stem}) [{lbl}]", fr, q.mean())
+
+def ml_metrics(y_pred, y_true):
+    """Standard ML regression metrics — computed on all test events.
+
+    Computed in micrometers for readability.
+    Note: RMSE here == RMS in fits.py when bias≈0, but is exact regardless of bias.
+    """
+    res    = (y_pred - y_true) * 1000.0
+    mse    = float(np.mean(res ** 2))
+    rmse   = float(np.sqrt(mse))
+    mae    = float(np.mean(np.abs(res)))
+    ss_res = float(np.sum(res ** 2))
+    ss_tot = float(np.sum(((y_true - y_true.mean()) * 1000.0) ** 2))
+    r2     = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+    return dict(mse=mse, rmse=rmse, mae=mae, r2=r2)
+
+def print_ml_metrics(name, y_pred, y_true):
+    m = ml_metrics(y_pred, y_true)
+    print(f"  {name:44s}  MSE={m['mse']:8.0f} um^2  RMSE={m['rmse']:6.0f} um  "
+          f"MAE={m['mae']:6.0f} um  R2={m['r2']:.4f}")
 
 def print_row(name, fr, frac):
     if fr is None:
@@ -81,7 +101,7 @@ def main():
         res, qc, fr, domain = load_npz(p)
         gnn_entries.append((stem, res, qc, fr, domain))
 
-    header = f"  {'Methode':44s} {'sigma_core':>9s}  {'sigma_w':>8s}  {'sigma_68':>8s}  {'RMS':>5s}  {'in_2mm':>7s}"
+    header = f"  {'Method':44s} {'sigma_core':>9s}  {'sigma_w':>8s}  {'sigma_68':>8s}  {'RMS':>5s}  {'in_2mm':>7s}"
     print(f"\n{header}")
     print("  " + "-" * 90)
     print_row("Charge-mean (Vogel h_residual_6)",  fit_fab, None)
@@ -92,6 +112,15 @@ def main():
         label = f"GNN ({stem})"
         print_row(label, fr, qc.mean())
         print_domain_rows(stem, res, qc, domain)
+
+    print(f"\n  {'Method':44s}  {'MSE [um^2]':>12s}  {'RMSE [um]':>9s}  {'MAE [um]':>8s}  {'R2':>6s}")
+    print("  " + "-" * 90)
+    d_xgb_full = np.load(xgb_path)
+    print_ml_metrics("Charge-mean (cluster-aware)", d_xgb_full["charge_mean_pred"], d_xgb_full["y_true"])
+    print_ml_metrics("XGBoost",                     d_xgb_full["y_pred"],           d_xgb_full["y_true"])
+    for stem, res, qc, fr, domain in gnn_entries:
+        npz = np.load(OUT / f"{stem}_predictions.npz")
+        print_ml_metrics(f"GNN ({stem})", npz["y_pred"], npz["y_true"])
 
     xlim_um = 2000
     bin_width = 20

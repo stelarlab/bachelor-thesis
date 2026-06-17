@@ -32,7 +32,7 @@ LABELS = {
     "tc":         "Time-Corrected Centroid",
     "xgb":        "XGBoost",
     "gnn":        "GNN",
-    "gnn_alldata":"GNN (alle Daten)",
+    "gnn_alldata":"GNN (all data)",
     "gnn_tc":     "GNN + r_tc Feature",
 }
 
@@ -145,6 +145,7 @@ def plot_efficiency(data):
     print(f"  -> {PLOTDIR / 'efficiency_bar.png'}")
 
 def plot_history(histories):
+    # history columns: 0=ep 1=tr_loss 2=va_loss 3=RMSE[um] 4=MSE[um2] 5=MAE[um] 6=R2
     if not histories:
         print("  -> no history data found, skipping.")
         return
@@ -159,15 +160,49 @@ def plot_history(histories):
     for ax in axes:
         ax.legend(fontsize=8); ax.set_xlabel("epoch")
     axes[0].set_ylabel("Huber loss"); axes[0].set_title("train (—) / val (--) loss")
-    axes[1].set_ylabel("RMS [µm]");   axes[1].set_title("val RMS over epochs")
+    axes[1].set_ylabel("RMSE [µm]");  axes[1].set_title("val RMSE over epochs")
     plt.tight_layout()
     fig.savefig(PLOTDIR / "history_gnn.png", dpi=150)
     plt.close(fig)
     print(f"  -> {PLOTDIR / 'history_gnn.png'}")
 
+def plot_history_metrics(histories):
+    """MSE / RMSE / R2 / MAE over epochs.
+
+    Plateaus indicate when early stopping could trigger; a jumpy R2 curve points
+    to outlier events that dominate the (squared) MSE. Only histories with the
+    extended columns (>=7) are plotted.
+    """
+    rich = {s: h for s, h in histories.items() if h.shape[1] >= 7}
+    if not rich:
+        print("  -> no extended history (MSE/MAE/R2) found, skipping.")
+        return
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    panels = [
+        (0, 0, 4, "MSE [µm²]",  "MSE",  False),
+        (0, 1, 3, "RMSE [µm]",  "RMSE", False),
+        (1, 0, 5, "MAE [µm]",   "MAE",  False),
+        (1, 1, 6, "R² score",   "R²",   True),
+    ]
+    for r, c, col, ylabel, title, is_r2 in panels:
+        ax = axes[r, c]
+        for stem, hist in rich.items():
+            ax.plot(hist[:, 0], hist[:, col], color=COLORS.get(stem, "black"),
+                    lw=1.6, marker="o", ms=3, label=LABELS.get(stem, stem))
+        ax.set_xlabel("epoch"); ax.set_ylabel(ylabel); ax.set_title(title)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8)
+        if not is_r2:
+            ax.set_yscale("log")
+    fig.suptitle("GNN training history — MSE / RMSE / MAE / R² (val set)")
+    plt.tight_layout()
+    fig.savefig(PLOTDIR / "history_metrics_gnn.png", dpi=150)
+    plt.close(fig)
+    print(f"  -> {PLOTDIR / 'history_metrics_gnn.png'}")
+
 def plot_scatter_cm_tc(data):
     if "cm" not in data or "tc" not in data:
-        print("  -> cm oder tc fehlt, ueberspringe Scatter-Plot.")
+        print("  -> cm or tc missing, skipping scatter plot.")
         return
     res_cm = data["cm"]; res_tc = data["tc"]
 
@@ -204,12 +239,12 @@ def plot_residual_vs_nstrips(data):
         res = data[key] * 1000
         qc  = np.abs(res) < 2000
         ax.hist(res[qc], bins=bins, histtype="stepfilled", alpha=0.6,
-                color=COLORS.get(key, "gray"), label="alle Events")
+                color=COLORS.get(key, "gray"), label="all events")
 
         tail = (np.abs(res) > 500) & (np.abs(res) < 2000)
         ax.hist(res[tail], bins=bins, histtype="step", lw=1.5,
-                color="red", label=f"Tails (|res|>500µm): {tail.mean()*100:.1f}%")
-        ax.set_xlabel("Residuum [µm]"); ax.set_ylabel("entries")
+                color="red", label=f"tails (|res|>500µm): {tail.mean()*100:.1f}%")
+        ax.set_xlabel("residual [µm]"); ax.set_ylabel("entries")
         ax.set_title(title); ax.legend(fontsize=8)
     plt.tight_layout()
     fig.savefig(PLOTDIR / "tail_analysis.png", dpi=150)
@@ -226,6 +261,7 @@ def main():
     plot_residuals(data, "residuals_zoom.png", xlim_um=500,  title="residuals — core region ±500 µm")
     plot_efficiency(data)
     plot_history(histories)
+    plot_history_metrics(histories)
     plot_scatter_cm_tc(data)
     plot_residual_vs_nstrips(data)
     print(f"\n[PLOTS] done: {PLOTDIR}", flush=True)

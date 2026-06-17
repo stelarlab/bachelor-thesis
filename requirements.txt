@@ -1,9 +1,10 @@
 torch
-torch-geometric
 xgboost
 uproot
 awkward
 numpy
+pandas
 matplotlib
 scipy
 tqdm
+# optional: graphviz (only for analysis/analyse_xgb_tails.py tree images)

@@ -1,3 +1,8 @@
+"""Zero-shot transfer: apply a trained model to an unseen dataset without retraining.
+
+The TC anchor lives in the unified dataset.py (tc_anchor flag); dataset_tc.py was
+merged into it. tc_anchor is inferred from the model: 5 strip features = TC model.
+"""
 from __future__ import annotations
 import argparse
 from pathlib import Path
@@ -7,15 +12,13 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 import sys
-from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from data_loader import load_events, learn_frame_transform, load_detector_shift
-from dataset_tc import HitDataset as HitDatasetTC, Normalization as NormTC, collate_padded as collate_tc
-from dataset   import HitDataset, Normalization, collate_padded
+from dataset import HitDataset, Normalization, collate_padded
 from model import StripModel
 from fits import fit_residuals
 
-ROOT  = Path(__file__).resolve().parent
+ROOT  = Path(__file__).resolve().parents[1]   # repo root (pipeline/ is one level down)
 OUT   = ROOT / "outputs"
 PLOTS = OUT / "plots"
 PLOTS.mkdir(exist_ok=True)
@@ -29,30 +32,24 @@ def run(args):
     n_strip_feats_model = _state["strip_encoder.0.weight"].shape[1]
 
     use_tc = args.tc or (n_strip_feats_model == 5)
-    norm = NormTC.load(norm_path) if use_tc else Normalization.load(norm_path)
-    print(f"[ZeroShot] Modell: {n_strip_feats_model} Strip-Feats  use_tc={use_tc}")
-    print(f"[ZeroShot] Normierung: theta={norm.theta_deg}deg  tmax={norm.tmax_ns}ns")
+    norm = Normalization.load(norm_path)
+    print(f"[ZeroShot] model: {n_strip_feats_model} strip feats  use_tc={use_tc}")
+    print(f"[ZeroShot] normalization: theta={norm.theta_deg}deg  tmax={norm.tmax_ns}ns")
     data_path = Path(args.data)
     if not data_path.is_absolute():
         data_path = ROOT / data_path
-    print(f"[ZeroShot] Datensatz: {data_path.name}")
+    print(f"[ZeroShot] dataset: {data_path.name}")
     ev = load_events(data_path)
     a, b = learn_frame_transform(ev)
     detector_shift = load_detector_shift(OUT)
-    print(f"[ZeroShot] {ev.n_events} Events  shift={detector_shift*1000:.1f}um")
+    print(f"[ZeroShot] {ev.n_events} events  shift={detector_shift*1000:.1f}um")
     all_idx = np.arange(ev.n_events)
-    if use_tc:
-        ds = HitDatasetTC(ev, all_idx, a, b, norm, detector_shift_mm=detector_shift)
-        dl = DataLoader(ds, batch_size=512, shuffle=False, collate_fn=collate_tc, num_workers=0)
-        n_strip_feats = n_strip_feats_model
-    else:
-        ds = HitDataset(ev, all_idx, a, b, norm, detector_shift_mm=detector_shift)
-        dl = DataLoader(ds, batch_size=512, shuffle=False, collate_fn=collate_padded, num_workers=0)
-        n_strip_feats = n_strip_feats_model
-    model = StripModel(n_strip_feats=n_strip_feats).to(device)
+    ds = HitDataset(ev, all_idx, a, b, norm, detector_shift_mm=detector_shift, tc_anchor=use_tc)
+    dl = DataLoader(ds, batch_size=512, shuffle=False, collate_fn=collate_padded, num_workers=0)
+    model = StripModel(n_strip_feats=n_strip_feats_model).to(device)
     model.load_state_dict(_state)
     model.eval()
-    print(f"[ZeroShot] Modell geladen: {args.model}")
+    print(f"[ZeroShot] model loaded: {args.model}")
     y_pred_list, y_true_list = [], []
     with torch.no_grad():
         for batch in dl:
@@ -66,9 +63,9 @@ def run(args):
     res = y_pred - y_true
     qc  = np.abs(res) < 2.0
     fr  = fit_residuals(res[qc], fit_range_mm=0.5)
-    sigma_det = np.sqrt(max(fr.sigma_core_um**2 - 57**2, 0))
-    print(f"[ZeroShot] Events: {len(y_pred)}")
-    print(f"[ZeroShot] Effizienz: {qc.mean()*100:.1f}%")
+    sigma_det = np.sqrt(max(fr.sigma_core_um**2 - 57**2, 0))   # subtract track error (Vogel, 57 um)
+    print(f"[ZeroShot] events: {len(y_pred)}")
+    print(f"[ZeroShot] efficiency: {qc.mean()*100:.1f}%")
     print(f"[ZeroShot] sigma_core = {fr.sigma_core_um:.0f} um")
     print(f"[ZeroShot] sigma_det  = {sigma_det:.0f} um")
     print(f"[ZeroShot] sigma_w    = {fr.sigma_weighted_um:.0f} um")
@@ -77,23 +74,23 @@ def run(args):
         slope_frame=a, offset_frame=b,
         train_norm_theta=norm.theta_deg, train_norm_tmax=norm.tmax_ns,
         eval_data=str(data_path.name))
-    print(f"[ZeroShot] gespeichert: {npz_path}")
+    print(f"[ZeroShot] saved: {npz_path}")
     xlim_um = 2000
     bins = np.arange(-xlim_um, xlim_um + 20, 20)
     fig, ax = plt.subplots(figsize=(9, 5))
     ax.hist(res[np.abs(res*1000)<=xlim_um]*1000, bins=bins, histtype="step", lw=1.8, color="tab:red",
-            label=f"Zero-Shot  sigma_core={fr.sigma_core_um:.0f}um  sigma_det={sigma_det:.0f}um  eff={qc.mean()*100:.0f}%")
+            label=f"zero-shot  sigma_core={fr.sigma_core_um:.0f}um  sigma_det={sigma_det:.0f}um  eff={qc.mean()*100:.0f}%")
     ax.axvline(0, color="black", lw=0.8, ls="--")
-    ax.set_xlabel("Residuum  y_pred - y_true  [um]")
-    ax.set_ylabel("Eintraege")
+    ax.set_xlabel("residual  y_pred - y_true  [um]")
+    ax.set_ylabel("entries")
     ax.set_yscale("log")
     ax.set_xlim(-xlim_um, xlim_um)
     ax.legend(fontsize=9)
-    ax.set_title(f"Zero-Shot: Modell ({norm.tmax_ns:.0f}ns/{norm.theta_deg:.0f}deg) -> {data_path.stem}")
+    ax.set_title(f"zero-shot: model ({norm.tmax_ns:.0f}ns/{norm.theta_deg:.0f}deg) -> {data_path.stem}")
     plt.tight_layout()
     plot_path = PLOTS / f"{args.out_prefix}_residuals.png"
     fig.savefig(plot_path, dpi=140); plt.close(fig)
-    print(f"[ZeroShot] Plot: {plot_path}")
+    print(f"[ZeroShot] plot: {plot_path}")
 
 def main():
     p = argparse.ArgumentParser()
