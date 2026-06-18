@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fits import fit_residuals
 
-ROOT = Path(__file__).resolve().parent
-DATA = ROOT.parent / "Datensatz" / "Data_for_Roman_29deg_530V_100ns_x9.root"
+ROOT = Path(__file__).resolve().parents[1]   # repo root (src/ is one level down)
+DATA = ROOT / "Data_for_Roman_29deg_530V_100ns_x9.root"
 OUT  = ROOT / "outputs"
 PLOTDIR = OUT / "plots"
 PLOTDIR.mkdir(exist_ok=True)
