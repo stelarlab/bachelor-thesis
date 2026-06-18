@@ -12,7 +12,7 @@ pip install -r requirements.txt
 DATA=Data_for_Roman_29deg_530V_100ns_x9.root
 
 python pipeline/01_diagnose.py        --data $DATA   # calibration -> outputs/detector_shift.json
-python pipeline/03_train_xgboost.py                  # XGBoost     -> outputs/xgb_*.{npz,json}
+python pipeline/03_train_xgboost.py   --data $DATA   # XGBoost     -> outputs/xgb_*.{npz,json}
 python pipeline/04_train_gnn.py       --data $DATA --tc-anchor --out-prefix gnn_road_tc
 python src/evaluate.py                               # comparison table over all models
 python src/plots.py                                  # figures -> outputs/plots/
@@ -65,6 +65,13 @@ Two resolution measures are reported, since they answer different questions:
 ![Core vs tail robustness](results/figures/sigma_comparison.png)
 
 ![XGBoost feature importance](results/figures/feature_importance_gain.png)
+
+![GNN training metrics](results/figures/history_metrics_gnn.png)
+
+![Input: strips per event](results/figures/nstrips_distribution.png)
+
+![Input: cluster gaps](results/figures/gap_distribution.png)
+
 
 ## Pipeline
 
@@ -120,22 +127,6 @@ results/figures/        figures
 
 All scripts write to a shared `outputs/` at the repo root and read `--data <file.root>`.
 
-## Data flow
-
-```
-.root ──> 01_diagnose ───────────────> outputs/detector_shift.json
-                                            │ (read by all training steps)
-.root ──> 03_train_xgboost ──┐              ▼
-.root ──> 04_train_gnn ───────┼──> outputs/<name>_predictions.npz
-                              │    outputs/xgb_model.json (XGBoost only)
-                              ▼
-                       evaluate.py  ──> comparison table (stdout)
-                       plots.py     ──> outputs/plots/*.png
-                       analysis/*   ──> outputs/*_report.txt + figures
-```
-
-Each `*_predictions.npz` holds `y_pred`, `y_true` and `test_idx`; the GNN files also
-carry the per-epoch training `history` (loss, RMSE, MSE, MAE, R²) used by `plots.py`.
 
 ## Data
 
