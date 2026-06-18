@@ -72,7 +72,6 @@ Two resolution measures are reported, since they answer different questions:
 
 ![Input: cluster gaps](results/figures/gap_distribution.png)
 
-![XGBoost discretization effect](results/figures/xgb_discretization.png)
 
 ## Pipeline
 
@@ -128,22 +127,6 @@ results/figures/        figures
 
 All scripts write to a shared `outputs/` at the repo root and read `--data <file.root>`.
 
-## Data flow
-
-```
-.root ──> 01_diagnose ───────────────> outputs/detector_shift.json
-                                            │ (read by all training steps)
-.root ──> 03_train_xgboost ──┐              ▼
-.root ──> 04_train_gnn ───────┼──> outputs/<name>_predictions.npz
-                              │    outputs/xgb_model.json (XGBoost only)
-                              ▼
-                       evaluate.py  ──> comparison table (stdout)
-                       plots.py     ──> outputs/plots/*.png
-                       analysis/*   ──> outputs/*_report.txt + figures
-```
-
-Each `*_predictions.npz` holds `y_pred`, `y_true` and `test_idx`; the GNN files also
-carry the per-epoch training `history` (loss, RMSE, MSE, MAE, R²) used by `plots.py`.
 
 ## Data
 
