@@ -12,7 +12,7 @@ pip install -r requirements.txt
 DATA=Data_for_Roman_29deg_530V_100ns_x9.root
 
 python pipeline/01_diagnose.py        --data $DATA   # calibration -> outputs/detector_shift.json
-python pipeline/03_train_xgboost.py                  # XGBoost     -> outputs/xgb_*.{npz,json}
+python pipeline/03_train_xgboost.py   --data $DATA   # XGBoost     -> outputs/xgb_*.{npz,json}
 python pipeline/04_train_gnn.py       --data $DATA --tc-anchor --out-prefix gnn_road_tc
 python src/evaluate.py                               # comparison table over all models
 python src/plots.py                                  # figures -> outputs/plots/
@@ -65,6 +65,14 @@ Two resolution measures are reported, since they answer different questions:
 ![Core vs tail robustness](results/figures/sigma_comparison.png)
 
 ![XGBoost feature importance](results/figures/feature_importance_gain.png)
+
+![GNN training metrics](results/figures/history_metrics_gnn.png)
+
+![Input: strips per event](results/figures/nstrips_distribution.png)
+
+![Input: cluster gaps](results/figures/gap_distribution.png)
+
+![XGBoost discretization effect](results/figures/xgb_discretization.png)
 
 ## Pipeline
 

@@ -10,7 +10,6 @@ from features import FEATURES, build_features
 
 MAX_NHITS_TRAIN = 50
 ROOT = Path(__file__).resolve().parents[1]   # repo root (pipeline/ is one level down)
-DATA = ROOT / "Data_for_Roman_29deg_530V_100ns_x9.root"
 OUT  = ROOT / "outputs"
 OUT.mkdir(exist_ok=True)
 SEED  = 42
@@ -18,6 +17,11 @@ SPLIT = (0.70, 0.15, 0.15)
 
 
 def main():
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--data", type=str, required=True, help="Path to .root file")
+    args = p.parse_args()
+    DATA = Path(args.data)
     print("[XGB] loading data ...", flush=True)
     ev = load_events(DATA)
     a, b = learn_frame_transform(ev)
