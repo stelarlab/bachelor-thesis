@@ -84,7 +84,7 @@ def main():
         model.load_model(str(model_path))
         for imp_type in ["gain", "weight", "cover"]:
             scores = model.get_booster().get_score(importance_type=imp_type)
-            vals = [scores.get(f"f{i}", 0.0) for i in range(len(FEATURES))]
+            vals = [scores.get(FEATURES[i], 0.0) for i in range(len(FEATURES))]
             order = np.argsort(vals)[::-1]
             fig, ax = plt.subplots(figsize=(10, 7))
             ax.barh([FEATURES[o] for o in order], [vals[o] for o in order])
