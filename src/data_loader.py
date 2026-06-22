@@ -11,9 +11,11 @@ import numpy as np
 import uproot
 from numpy.linalg import lstsq
 
-PITCH_MM  = 0.425   # SM1 strip pitch, Vogel Diss. p. 35
-V_DRIFT   = 0.047   # mm/ns, Ar:CO2:iC4H10 93:5:2
-TAN_THETA = math.tan(math.radians(29.0))  # tan(29°) ≈ 0.5543
+PITCH_MM  = 0.425    # SM1 strip pitch [mm], Vogel §2.3.2
+V_DRIFT   = 0.04630  # electron drift velocity [mm/ns], Ar:CO₂:iC₄H₁₀ 93:5:2,
+                     # Vogel §4.4.2: vD = 4.63 cm/µs from 5 mm gap / 108 ns box width
+                     # = 4.63 * 10 mm/cm / 1000 ns/µs = 0.04630 mm/ns exactly
+TAN_THETA = math.tan(math.radians(29.0))  # tan(29°) ≈ 0.5543, Vogel §7.2.3
 ROAD_MM   = 5.0     # strip selection window around track
 
 @dataclass
@@ -51,6 +53,28 @@ def select_strips_in_road(xs, qs, ts, track_x, road_mm: float = ROAD_MM):
         return xs, qs, ts
     in_road = np.abs(xs - track_x) < road_mm
     return xs[in_road], qs[in_road], ts[in_road]
+
+def filter_road_empty(ev: "EventArrays", slope_frame: float, offset_frame: float,
+                      detector_shift_mm: float = 0.0,
+                      road_mm: float = ROAD_MM) -> np.ndarray:
+    """Return indices of events that have at least one strip inside the road.
+
+    Events with no strip in the ±road_mm window around the track extrapolation
+    cause the TC-anchor to be computed from unrelated strips, producing residuals
+    of 10–300 mm that dominate RMSE while σ₆₈ stays unaffected.  These events
+    are physically real (δ-electron background, Vogel §2.1.1) but cannot be
+    reconstructed — they should be excluded from training *and* evaluation so
+    that RMSE reflects true model quality.
+    """
+    keep = []
+    for i in range(ev.n_events):
+        if ev.n_hits[i] == 0:
+            continue
+        xs      = np.asarray(ev.hits_x[i], dtype=np.float32) - detector_shift_mm
+        track_x = float((ev.track_icept[i] - offset_frame) / slope_frame)
+        if np.any(np.abs(xs - track_x) < road_mm):
+            keep.append(i)
+    return np.array(keep, dtype=np.int64)
 
 def detector_shift_path(out_dir: Path | str) -> Path:
     return Path(out_dir) / "detector_shift.json"
@@ -99,17 +123,6 @@ def concat_events(*evs: "EventArrays") -> "EventArrays":
         track_slope=np.concatenate([e.track_slope for e in evs]),
         non_prec=np.concatenate([e.non_prec for e in evs]),
     )
-
-def time_corrected_centroid(xs, qs, ts, tan_theta: float = TAN_THETA):
-    # Vogel Diss. Eq. 5.39-5.40: x_tc = x_CW + (t_ref - t_CW) * v_drift * tan(θ)
-    q_sum = qs.sum()
-    if q_sum <= 0:
-        return float(np.nanmean(xs))
-    x_cm  = float((xs * qs).sum() / q_sum)
-    t_cw  = float((ts * qs).sum() / q_sum)
-    t_ref = float(ts.mean())
-    delta_t = t_ref - t_cw
-    return x_cm + delta_t * V_DRIFT * tan_theta
 
 def learn_frame_transform(ev: EventArrays) -> tuple[float, float]:
     # out_xpos (module frame) and out_track_icept (tracker frame) are related by
