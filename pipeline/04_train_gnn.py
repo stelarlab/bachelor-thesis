@@ -28,10 +28,9 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, ConcatDataset
 from tqdm import tqdm
 import sys
-from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from data_loader import load_events, learn_frame_transform, load_detector_shift
+from data_loader import load_events, learn_frame_transform, load_detector_shift, filter_road_empty
 from dataset import HitDataset, Normalization, collate_padded
 from model import StripModel
 
@@ -81,8 +80,13 @@ def main():
                    help="Shaping time [ns] of the dataset. Single-domain only.")
     p.add_argument("--theta",        type=float, default=29.0,
                    help="Track incidence angle [deg].")
-    p.add_argument("--tc-anchor",    action="store_true",
+    p.add_argument("--tc-anchor",      action="store_true",
                    help="Use TC-centroid as anchor (better empirically; default: median).")
+    p.add_argument("--no-cluster-select", action="store_true",
+                   help="Disable within-road cluster isolation (default: enabled). "
+                        "Cluster isolation picks the single connected strip cluster "
+                        "closest to the track, removing δ-electron contamination "
+                        "inside the road (Vogel §2.1.1).")
     p.add_argument("--train-all",    action="store_true",
                    help="Train on train+val; keep 5%% as internal mini-val for model selection.")
     p.add_argument("--patience",     type=int, default=10,
@@ -105,7 +109,16 @@ def main():
         print(f"[GNN]   frame transform: a={a:.6f}  b={b:+.4f}", flush=True)
         all_ev.append(ev); all_a.append(a); all_b.append(b)
 
-        valid_idx = np.where(ev.n_hits > 0)[0]
+        # Keep only events that have at least one strip inside the road.
+        # Events with an empty road (δ-electron background, Vogel §2.1.1) produce
+        # an anchor far from the true position; their residuals dominate RMSE while
+        # leaving σ₆₈ unaffected.  Filtering here makes both metrics consistent and
+        # aligns the GNN test set with XGBoost (which already skips road-empty events).
+        valid_idx = filter_road_empty(ev, a, b,
+                                      detector_shift_mm=detector_shift,
+                                      road_mm=5.0)
+        print(f"[GNN]   road-empty filter: {ev.n_events} → {len(valid_idx)} events "
+              f"({100*(1-len(valid_idx)/ev.n_events):.1f}% removed)", flush=True)
         rng  = np.random.default_rng(args.seed)
         perm = rng.permutation(len(valid_idx))
         n_tr = int(0.70 * len(valid_idx))
@@ -136,8 +149,10 @@ def main():
         norm = Normalization.from_arrays(
             all_ev[0], train_idx=splits[0]["train"],
             theta_deg=args.theta, tmax_ns=args.tmax)
+    cluster_select = not args.no_cluster_select
     anchor_name = "TC-centroid" if args.tc_anchor else "median(x)"
-    print(f"[GNN] anchor: {anchor_name}  theta={args.theta}deg", flush=True)
+    print(f"[GNN] anchor: {anchor_name}  theta={args.theta}deg  "
+          f"cluster_select={cluster_select}", flush=True)
 
     domain_test = np.concatenate([
         np.full(len(sp["test"]), d, dtype=np.int32) for d, sp in enumerate(splits)
@@ -146,7 +161,8 @@ def main():
     def make_ds(split_key):
         return ConcatDataset([
             HitDataset(ev, sp[split_key], a, b, norm,
-                       detector_shift_mm=detector_shift, tc_anchor=args.tc_anchor)
+                       detector_shift_mm=detector_shift, tc_anchor=args.tc_anchor,
+                       cluster_select=cluster_select)
             for ev, sp, a, b in zip(all_ev, splits, all_a, all_b)
         ])
 
@@ -188,10 +204,15 @@ def main():
             tr_loss += loss.item() * bs; n += bs
         tr_loss /= max(n, 1)
 
-        # Validation: Huber loss + ML metrics (MSE/RMSE/MAE/R2) on the xpos scale.
-        # sq/abs/sy/syy are accumulated so R2 can be computed without storing all
-        # predictions (ss_tot = sum(y^2) - n*mean(y)^2).
-        model.eval(); va_loss = 0.0; n = 0; sq = 0.0; sab = 0.0; sy = 0.0; syy = 0.0
+        # Validation: Huber loss + MSE/RMSE/MAE/R²/σ₆₈ on the xpos scale.
+        # σ₆₈ = 0.5*(Q84−Q16) is the robust resolution metric used throughout
+        # (Vogel §5.3.3 analogue); RMSE is kept for completeness but σ₆₈ is
+        # the primary metric because it is insensitive to the tail distribution.
+        # residuals_mm is collected for quantile computation; all other accumulators
+        # avoid storing the full array to keep memory usage constant.
+        model.eval(); va_loss = 0.0; n = 0
+        sq = 0.0; sab = 0.0; sy = 0.0; syy = 0.0
+        residuals_mm = []
         with torch.no_grad():
             for batch in tqdm(dl_va, desc=f"ep {ep:2d} val  ", ncols=100, leave=False):
                 for k in ("strip_feats", "mask", "global_feats", "label_local", "x_med", "label_xpos"):
@@ -206,18 +227,23 @@ def main():
                 sy       += y_true.sum().item()
                 syy      += (y_true ** 2).sum().item()
                 n        += batch["strip_feats"].size(0)
+                residuals_mm.append(err.cpu().numpy())
         va_loss /= max(n, 1)
         nn_      = max(n, 1)
-        mse_um2  = (sq / nn_) * 1e6                       # mm^2 -> um^2
-        rms_um   = float(np.sqrt(sq / nn_)) * 1000.0      # = RMSE
+        mse_um2  = (sq / nn_) * 1e6                       # mm² → µm²
+        rms_um   = float(np.sqrt(sq / nn_)) * 1000.0      # RMSE [µm]
         mae_um   = (sab / nn_) * 1000.0
-        ss_tot   = syy - sy * sy / nn_                    # sum((y-ybar)^2) in mm^2
+        ss_tot   = syy - sy * sy / nn_
         r2       = 1.0 - sq / ss_tot if ss_tot > 1e-12 else float("nan")
+        res_all  = np.concatenate(residuals_mm)            # [mm]
+        q16, q84 = np.percentile(res_all, [16, 84])
+        sigma68_um = 0.5 * (q84 - q16) * 1000.0           # σ₆₈ [µm]
         sched.step()
 
-        history.append((ep, tr_loss, va_loss, rms_um, mse_um2, mae_um, r2))
-        print(f"  ep {ep:2d}: train={tr_loss:.4f}  val={va_loss:.4f}  RMSE={rms_um:.0f}um  "
-              f"MAE={mae_um:.0f}um  R²={r2:.4f}  ({time.time()-t0:.1f}s)", flush=True)
+        history.append((ep, tr_loss, va_loss, rms_um, mse_um2, mae_um, r2, sigma68_um))
+        print(f"  ep {ep:2d}: train={tr_loss:.4f}  val={va_loss:.4f}  "
+              f"σ₆₈={sigma68_um:.0f}µm  RMSE={rms_um:.0f}µm  "
+              f"MAE={mae_um:.0f}µm  R²={r2:.4f}  ({time.time()-t0:.1f}s)", flush=True)
 
         if va_loss < best_val - 1e-5:
             best_val, best_ep = va_loss, ep
