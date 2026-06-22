@@ -7,9 +7,6 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import numpy as np
 import uproot
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fits import fit_residuals
 
@@ -145,7 +142,7 @@ def plot_efficiency(data):
     print(f"  -> {PLOTDIR / 'efficiency_bar.png'}")
 
 def plot_history(histories):
-    # history columns: 0=ep 1=tr_loss 2=va_loss 3=RMSE[um] 4=MSE[um2] 5=MAE[um] 6=R2
+    # history columns: 0=ep 1=tr_loss 2=va_loss 3=RMSE[um] 4=MSE[um2] 5=MAE[um] 6=R2 7=σ₆₈[um]
     if not histories:
         print("  -> no history data found, skipping.")
         return
@@ -167,34 +164,50 @@ def plot_history(histories):
     print(f"  -> {PLOTDIR / 'history_gnn.png'}")
 
 def plot_history_metrics(histories):
-    """MSE / RMSE / R2 / MAE over epochs.
+    """σ₆₈ / MSE / RMSE / MAE / R² over epochs (val set) — 2×3 grid.
 
-    Plateaus indicate when early stopping could trigger; a jumpy R2 curve points
-    to outlier events that dominate the (squared) MSE. Only histories with the
-    extended columns (>=7) are plotted.
+    History columns (8-column format from 04_train_gnn.py):
+      0=ep  1=tr_loss  2=va_loss  3=RMSE[µm]  4=MSE[µm²]  5=MAE[µm]  6=R²  7=σ₆₈[µm]
+
+    σ₆₈ = 0.5*(Q84−Q16): primary robust resolution metric (Vogel §5.3.3 analogue).
+    MSE/RMSE/MAE/R² are the standard ML metrics requested by supervisors.
+    Only histories with ≥7 columns are plotted (8-col required for σ₆₈ panel).
     """
     rich = {s: h for s, h in histories.items() if h.shape[1] >= 7}
     if not rich:
         print("  -> no extended history (MSE/MAE/R2) found, skipping.")
         return
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+    # panels: (row, col_in_grid, history_col, ylabel, title, is_r2, min_ncols)
     panels = [
-        (0, 0, 4, "MSE [µm²]",  "MSE",  False),
-        (0, 1, 3, "RMSE [µm]",  "RMSE", False),
-        (1, 0, 5, "MAE [µm]",   "MAE",  False),
-        (1, 1, 6, "R² score",   "R²",   True),
+        (0, 0, 7, "σ₆₈ [µm]",  "σ₆₈  (robust resolution)", False, 8),
+        (0, 1, 3, "RMSE [µm]", "RMSE",                      False, 7),
+        (0, 2, 4, "MSE [µm²]", "MSE",                       False, 7),
+        (1, 0, 5, "MAE [µm]",  "MAE",                       False, 7),
+        (1, 1, 6, "R² score",  "R²",                        True,  7),
     ]
-    for r, c, col, ylabel, title, is_r2 in panels:
+    for r, c, col, ylabel, title, is_r2, min_cols in panels:
         ax = axes[r, c]
+        plotted = False
         for stem, hist in rich.items():
+            if hist.shape[1] < min_cols:
+                continue
             ax.plot(hist[:, 0], hist[:, col], color=COLORS.get(stem, "black"),
                     lw=1.6, marker="o", ms=3, label=LABELS.get(stem, stem))
+            plotted = True
+        if not plotted:
+            ax.text(0.5, 0.5, "not available\n(re-train to populate)",
+                    ha="center", va="center", transform=ax.transAxes, color="gray")
         ax.set_xlabel("epoch"); ax.set_ylabel(ylabel); ax.set_title(title)
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8)
-        if not is_r2:
+        if not is_r2 and plotted:
             ax.set_yscale("log")
-    fig.suptitle("GNN training history — MSE / RMSE / MAE / R² (val set)")
+
+    axes[1, 2].set_visible(False)   # sixth cell unused in 2×3 grid
+
+    fig.suptitle("GNN training history — σ₆₈ / RMSE / MSE / MAE / R²  (val set)")
     plt.tight_layout()
     fig.savefig(PLOTDIR / "history_metrics_gnn.png", dpi=150)
     plt.close(fig)
