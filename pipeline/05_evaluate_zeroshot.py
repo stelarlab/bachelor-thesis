@@ -13,7 +13,7 @@ import torch
 from torch.utils.data import DataLoader
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from data_loader import load_events, learn_frame_transform, load_detector_shift
+from data_loader import load_events, learn_frame_transform, load_detector_shift, filter_road_empty
 from dataset import HitDataset, Normalization, collate_padded
 from model import StripModel
 from fits import fit_residuals
@@ -42,9 +42,11 @@ def run(args):
     ev = load_events(data_path)
     a, b = learn_frame_transform(ev)
     detector_shift = load_detector_shift(OUT)
-    print(f"[ZeroShot] {ev.n_events} events  shift={detector_shift*1000:.1f}um")
-    all_idx = np.arange(ev.n_events)
-    ds = HitDataset(ev, all_idx, a, b, norm, detector_shift_mm=detector_shift, tc_anchor=use_tc)
+    all_idx = filter_road_empty(ev, a, b, detector_shift_mm=detector_shift)
+    print(f"[ZeroShot] {ev.n_events} events  shift={detector_shift*1000:.1f}um  "
+          f"road-empty removed: {ev.n_events - len(all_idx)} ({100*(1-len(all_idx)/ev.n_events):.1f}%)")
+    ds = HitDataset(ev, all_idx, a, b, norm, detector_shift_mm=detector_shift,
+                    tc_anchor=use_tc, cluster_select=True)
     dl = DataLoader(ds, batch_size=512, shuffle=False, collate_fn=collate_padded, num_workers=0)
     model = StripModel(n_strip_feats=n_strip_feats_model).to(device)
     model.load_state_dict(_state)
@@ -63,7 +65,11 @@ def run(args):
     res = y_pred - y_true
     qc  = np.abs(res) < 2.0
     fr  = fit_residuals(res[qc], fit_range_mm=0.5)
-    sigma_det = np.sqrt(max(fr.sigma_core_um**2 - 57**2, 0))   # subtract track error (Vogel, 57 um)
+    # Vogel §5.3.2: tracking error < σ_i ≈ 75 µm (reference chambers BLY).
+    # The exact interpolation error at the DUT depends on the setup geometry (Eq. 5.17).
+    # 57 µm is an estimate used here; treat sigma_det as approximate.
+    SIGMA_TRACK_UM = 57.0
+    sigma_det = np.sqrt(max(fr.sigma_core_um**2 - SIGMA_TRACK_UM**2, 0))
     print(f"[ZeroShot] events: {len(y_pred)}")
     print(f"[ZeroShot] efficiency: {qc.mean()*100:.1f}%")
     print(f"[ZeroShot] sigma_core = {fr.sigma_core_um:.0f} um")
