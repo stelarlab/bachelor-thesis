@@ -93,6 +93,25 @@ def load_detector_shift(out_dir: Path | str) -> float:
         return 0.0
     return float(json.loads(p.read_text())["mu_shift_mm"])
 
+def muTPC_clean(xs, ts, n_sigma=3.0):
+    """Iterative strip rejection: remove strips > n_sigma from linear muTPC t(x) fit.
+
+    xs must be sorted by position. Returns boolean mask (True = keep).
+    Removes δ-electron strips that contaminate timing features within the cluster
+    (Vogel §2.1.1). Used by both HitDataset and build_features."""
+    mask = np.ones(len(xs), dtype=bool)
+    for _ in range(3):
+        if mask.sum() < 2:
+            break
+        slope, intercept = np.polyfit(xs[mask], ts[mask], 1)
+        resid = np.abs(ts - (slope * xs + intercept))
+        sigma = resid[mask].std()
+        if sigma < 1e-9:
+            break
+        mask = resid < n_sigma * sigma
+    return mask
+
+
 def select_cluster_near_track(xs, qs, ts, track_x, gap_strips=2):
     # split hits into clusters (max one strip gap), pick the one closest to the track
     if len(xs) == 0:
