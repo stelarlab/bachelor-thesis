@@ -178,7 +178,7 @@ def main():
 
     device = _resolve_device(args.device)
     print(f"[GNN] device = {device}", flush=True)
-    model = StripModel(n_strip_feats=5, d_model=args.d_model, n_heads=args.n_heads,
+    model = StripModel(n_strip_feats=6, d_model=args.d_model, n_heads=args.n_heads,
                        n_layers=args.n_layers, dropout=args.dropout).to(device)
     print(f"[GNN] parameters: {sum(p.numel() for p in model.parameters()):,}", flush=True)
 
@@ -188,7 +188,7 @@ def main():
     sched   = torch.optim.lr_scheduler.SequentialLR(optim, [warmup, cosine], milestones=[10])
     huber   = nn.HuberLoss(delta=args.huber_delta)
 
-    best_val, best_state, best_ep = float("inf"), None, -1
+    best_sigma68, best_state, best_ep = float("inf"), None, -1
     no_improve = 0
     history = []
 
@@ -248,8 +248,8 @@ def main():
               f"σ₆₈={sigma68_um:.0f}µm  RMSE={rms_um:.0f}µm  "
               f"MAE={mae_um:.0f}µm  R²={r2:.4f}  ({time.time()-t0:.1f}s)", flush=True)
 
-        if va_loss < best_val - 1e-5:
-            best_val, best_ep = va_loss, ep
+        if sigma68_um < best_sigma68 - 0.5:
+            best_sigma68, best_ep = sigma68_um, ep
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             no_improve = 0
         else:
@@ -259,7 +259,7 @@ def main():
             break
 
     model.load_state_dict(best_state)
-    print(f"[GNN] best epoch = {best_ep}  val = {best_val:.4f}", flush=True)
+    print(f"[GNN] best epoch = {best_ep}  σ₆₈ = {best_sigma68:.0f}µm", flush=True)
 
     model.eval()
     preds_xpos, label_xpos, track_icepts = [], [], []
