@@ -26,7 +26,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from data_loader import EventArrays, V_DRIFT, ROAD_MM, select_strips_in_road, select_cluster_near_track, muTPC_clean
+from data_loader import EventArrays, V_DRIFT, ROAD_MM, select_strips_in_road, select_cluster_near_track
 
 
 @dataclass
@@ -143,11 +143,6 @@ class HitDataset(Dataset):
             sx, sq, st = select_strips_in_road(xs, qs, ts, track_x, road_mm=road_mm)
             if self.cluster_select and sx.size > 1:
                 sx, sq, st = select_cluster_near_track(sx, sq, st, track_x)
-            if sx.size >= 2:
-                order = np.argsort(sx)
-                clean = muTPC_clean(sx[order], st[order])
-                if clean.sum() >= 2:
-                    sx, sq, st = sx[order][clean], sq[order][clean], st[order][clean]
             self.hits_x.append(sx)
             self.hits_q.append(sq)
             self.hits_t.append(st)
@@ -173,9 +168,11 @@ class HitDataset(Dataset):
         q_norm = (q - self.norm.q_mean) / self.norm.q_std
         t_norm = (t - self.norm.t_mean) / self.norm.t_std
         z_norm = (z - self.norm.z_mean) / self.norm.z_std
-        x_rel  = (x - anchor).astype(np.float32) / 5.0   # local offset; /5 → road units
+        x_rel  = (x - anchor).astype(np.float32) / 5.0
+        # per-strip muTPC-corrected position projected onto pad plane (Vogel §5.4.1)
+        x_corr_rel = ((x - z * self.tan_theta) - anchor).astype(np.float32) / 5.0
 
-        strip = np.stack([x_norm, q_norm, t_norm, x_rel, z_norm], axis=1).astype(np.float32)
+        strip = np.stack([x_norm, q_norm, t_norm, x_rel, z_norm, x_corr_rel], axis=1).astype(np.float32)
         glob  = np.array([
             (self.slope[i]  - self.norm.slope_mean)   / self.norm.slope_std,
             (self.nonp[i]   - self.norm.nonprec_mean) / self.norm.nonprec_std,
