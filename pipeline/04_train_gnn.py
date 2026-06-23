@@ -80,7 +80,7 @@ def main():
                    help="Shaping time [ns] of the dataset. Single-domain only.")
     p.add_argument("--theta",        type=float, default=29.0,
                    help="Track incidence angle [deg].")
-    p.add_argument("--tc-anchor",      action="store_true",
+    p.add_argument("--tc-anchor",    action="store_true",
                    help="Use TC-centroid as anchor (better empirically; default: median).")
     p.add_argument("--no-cluster-select", action="store_true",
                    help="Disable within-road cluster isolation (default: enabled). "
@@ -89,8 +89,10 @@ def main():
                         "inside the road (Vogel §2.1.1).")
     p.add_argument("--train-all",    action="store_true",
                    help="Train on train+val; keep 5%% as internal mini-val for model selection.")
-    p.add_argument("--patience",     type=int, default=10,
+    p.add_argument("--patience",     type=int,   default=10,
                    help="Early-stopping patience in epochs.")
+    p.add_argument("--huber-delta",  type=float, default=0.2,
+                   help="Huber loss delta in road units (default 0.2 ≈ 1mm).")
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -183,7 +185,7 @@ def main():
     cosine  = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=max(args.epochs-10, 1))
     warmup  = torch.optim.lr_scheduler.LinearLR(optim, start_factor=0.1, end_factor=1.0, total_iters=10)
     sched   = torch.optim.lr_scheduler.SequentialLR(optim, [warmup, cosine], milestones=[10])
-    huber   = nn.HuberLoss(delta=0.2)   # delta=0.2 in 5mm units ≈ 1mm threshold
+    huber   = nn.HuberLoss(delta=args.huber_delta)
 
     best_val, best_state, best_ep = float("inf"), None, -1
     no_improve = 0
