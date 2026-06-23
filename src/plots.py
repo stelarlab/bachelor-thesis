@@ -16,7 +16,7 @@ OUT  = ROOT / "outputs"
 PLOTDIR = OUT / "plots"
 PLOTDIR.mkdir(exist_ok=True)
 
-COLORS = {
+_FIXED_COLORS = {
     "cm":  "gray",
     "tc":  "tab:orange",
     "xgb": "tab:blue",
@@ -24,6 +24,22 @@ COLORS = {
     "gnn_alldata": "tab:green",
     "gnn_tc": "tab:purple",
 }
+_PALETTE = ["tab:red", "tab:blue", "tab:green", "tab:purple", "tab:orange",
+            "tab:brown", "tab:pink", "tab:cyan", "tab:olive", "tab:gray"]
+_color_cache: dict[str, str] = {}
+
+def get_color(key: str) -> str:
+    if key in _FIXED_COLORS:
+        return _FIXED_COLORS[key]
+    if key not in _color_cache:
+        used = set(_FIXED_COLORS.values()) | set(_color_cache.values())
+        for c in _PALETTE:
+            if c not in used:
+                _color_cache[key] = c
+                break
+        else:
+            _color_cache[key] = _PALETTE[len(_color_cache) % len(_PALETTE)]
+    return _color_cache[key]
 LABELS = {
     "cm":         "Charge-Mean",
     "tc":         "Time-Corrected Centroid",
@@ -80,7 +96,7 @@ def plot_residuals(data, filename, xlim_um=2000, title="Residuen-Vergleich"):
         if qc.sum() < 10:
             continue
         fr    = fit_residuals(res[qc], fit_range_mm=0.5)
-        color = COLORS.get(key, "black")
+        color = get_color(key)
         label = LABELS.get(key, key)
     
         mask = np.abs(res * 1000) <= xlim_um
@@ -117,8 +133,8 @@ def plot_efficiency(data):
         res = data[k]; qc = np.abs(res) < 2.0
         sigmas.append(fit_residuals(res[qc], fit_range_mm=0.5).sigma_core_um if qc.sum() > 10 else float("nan"))
 
-    colors = [COLORS.get(k, "tab:gray") for k in keys]
-    labels = [LABELS.get(k, k) for k in keys]
+    colors = [get_color(k) for k in keys]
+    labels = [LABELS.get(k, k.replace("_", " ")) for k in keys]
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
 
@@ -148,7 +164,7 @@ def plot_history(histories):
         return
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
     for stem, hist in histories.items():
-        color = COLORS.get(stem, "black")
+        color = get_color(stem)
         label = LABELS.get(stem, stem)
         eps   = hist[:, 0]
         axes[0].plot(eps, hist[:, 1], color=color, lw=1.5, label=label)
@@ -193,7 +209,7 @@ def plot_history_metrics(histories):
         for stem, hist in rich.items():
             if hist.shape[1] < min_cols:
                 continue
-            ax.plot(hist[:, 0], hist[:, col], color=COLORS.get(stem, "black"),
+            ax.plot(hist[:, 0], hist[:, col], color=get_color(stem),
                     lw=1.6, marker="o", ms=3, label=LABELS.get(stem, stem))
             plotted = True
         if not plotted:
@@ -252,7 +268,7 @@ def plot_residual_vs_nstrips(data):
         res = data[key] * 1000
         qc  = np.abs(res) < 2000
         ax.hist(res[qc], bins=bins, histtype="stepfilled", alpha=0.6,
-                color=COLORS.get(key, "gray"), label="all events")
+                color=get_color(key), label="all events")
 
         tail = (np.abs(res) > 500) & (np.abs(res) < 2000)
         ax.hist(res[tail], bins=bins, histtype="step", lw=1.5,
