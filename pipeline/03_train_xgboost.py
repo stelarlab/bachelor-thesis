@@ -1,11 +1,11 @@
-"""XGBoost v8b: 24 features + tuned hyperparameters (12000 rounds, huber=0.3, depth=9)."""
+"""Train XGBoost position regressor on strip cluster features."""
 from __future__ import annotations
 from pathlib import Path
 import numpy as np
 import xgboost as xgb
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from data_loader import load_events, learn_frame_transform, load_detector_shift
+from data_loader import load_events, learn_frame_transform, load_detector_shift, filter_road_empty
 from features import FEATURES, build_features
 
 MAX_NHITS_TRAIN = 50
@@ -33,11 +33,19 @@ def main():
     else:
         print("[XGB] no detector shift set", flush=True)
 
+    valid_idx = filter_road_empty(ev, a, b, detector_shift_mm=detector_shift)
+    print(f"[XGB] road-empty filter: {ev.n_events} -> {len(valid_idx)} events "
+          f"({100*(1-len(valid_idx)/ev.n_events):.1f}% removed)", flush=True)
+
     X, y, mask, cm = build_features(ev, a, b, detector_shift_mm=detector_shift)
     print(f"[XGB] {len(FEATURES)} features", flush=True)
 
-    n_hits_full = ev.n_hits[mask]
-    Xv, yv, cmv = X[mask], y[mask], cm[mask]
+    road_mask = np.zeros(ev.n_events, dtype=bool)
+    road_mask[valid_idx] = True
+    full_mask = mask & road_mask
+
+    n_hits_full = ev.n_hits[full_mask]
+    Xv, yv, cmv = X[full_mask], y[full_mask], cm[full_mask]
     n = len(yv)
     rng = np.random.default_rng(SEED)
     perm = rng.permutation(n)
@@ -49,21 +57,20 @@ def main():
     print(f"[XGB] outlier cut: train {n_tr0}->{len(tr)}  val {n_va0}->{len(va)}", flush=True)
     print(f"[XGB] train={len(tr)} val={len(va)} test={len(te)}", flush=True)
 
-    y_off = float(yv[tr].mean())
+    # no x_min -> no absolute position, so predict local offset and reconstruct
+    label_tr = (yv[tr] - cmv[tr]) / 5.0
+    label_va = (yv[va] - cmv[va]) / 5.0
+    label_te = (yv[te] - cmv[te]) / 5.0
 
-    dtr = xgb.DMatrix(Xv[tr], label=yv[tr] - y_off, feature_names=FEATURES)
-    dva = xgb.DMatrix(Xv[va], label=yv[va] - y_off, feature_names=FEATURES)
-    dte = xgb.DMatrix(Xv[te], label=yv[te] - y_off, feature_names=FEATURES)
+    dtr = xgb.DMatrix(Xv[tr], label=label_tr, feature_names=FEATURES)
+    dva = xgb.DMatrix(Xv[va], label=label_va, feature_names=FEATURES)
+    dte = xgb.DMatrix(Xv[te], label=label_te, feature_names=FEATURES)
 
-    # v2 hyperparameters vs. v1:
-    #   huber_slope  1.0 -> 0.5  (more robust to outliers)
-    #   max_depth    8   -> 7    (less overfitting)
-    #   eta          0.05-> 0.03 (smaller steps)
-    #   num_rounds   1500-> 3000 (early_stopping=80)
-    #   min_child_w  5.0 -> 8.0  (better generalisation)
-    #   reg_lambda   1.0 -> 2.0  (stronger L2)
-    # v8 vs v4: num_boost_round 3000->8000, early_stopping 80->200
-    #            huber_slope 0.5->0.3 (sharper core), max_depth 7->9
+    # v2: huber_slope 1.0->0.5, max_depth 8->7, eta 0.05->0.03, min_child_w 5->8, reg_lambda 1->2
+    # v8: num_boost_round 3000->12000, early_stopping 80->300, huber_slope 0.5->0.3, depth 7->9
+    # v9: features 24->22 (x_min removed, abs. time anchored, muTPC full fit, tc_correction added)
+    #     label changed to local offset (y - cm) / 5.0 — cm anchor replaces x_min
+    # v10: track_slope removed → sigma68 2022 um (vs 577 um) — essential, kept back in
     params = dict(
         objective="reg:pseudohubererror", huber_slope=0.3,
         tree_method="hist", max_depth=9, eta=0.03,
@@ -79,7 +86,7 @@ def main():
     )
     print(f"[XGB] best_iteration = {booster.best_iteration}", flush=True)
 
-    y_pred = booster.predict(dte, iteration_range=(0, booster.best_iteration + 1)) + y_off
+    y_pred = booster.predict(dte, iteration_range=(0, booster.best_iteration + 1)) * 5.0 + cmv[te]
     np.savez_compressed(
         OUT / "xgb_predictions.npz",
         y_pred=y_pred, y_true=yv[te], charge_mean_pred=cmv[te],

@@ -92,7 +92,8 @@ def main():
     p.add_argument("--patience",     type=int,   default=10,
                    help="Early-stopping patience in epochs.")
     p.add_argument("--huber-delta",  type=float, default=0.2,
-                   help="Huber loss delta in road units (default 0.2 ≈ 1mm).")
+                   help="Huber loss delta in road units (default 0.2 ≈ 1 mm). "
+                        "Smaller values (e.g. 0.05 ≈ 250 µm) sharpen core optimisation.")
     args = p.parse_args()
 
     torch.manual_seed(args.seed)

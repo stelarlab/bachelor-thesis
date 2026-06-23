@@ -26,7 +26,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from data_loader import EventArrays, V_DRIFT, ROAD_MM, select_strips_in_road, select_cluster_near_track
+from data_loader import EventArrays, V_DRIFT, ROAD_MM, select_strips_in_road, select_cluster_near_track, muTPC_clean
 
 
 @dataclass
@@ -143,6 +143,11 @@ class HitDataset(Dataset):
             sx, sq, st = select_strips_in_road(xs, qs, ts, track_x, road_mm=road_mm)
             if self.cluster_select and sx.size > 1:
                 sx, sq, st = select_cluster_near_track(sx, sq, st, track_x)
+            if sx.size >= 2:
+                order = np.argsort(sx)
+                clean = muTPC_clean(sx[order], st[order])
+                if clean.sum() >= 2:
+                    sx, sq, st = sx[order][clean], sq[order][clean], st[order][clean]
             self.hits_x.append(sx)
             self.hits_q.append(sq)
             self.hits_t.append(st)
