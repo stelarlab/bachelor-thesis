@@ -281,9 +281,22 @@ def plot_residual_vs_nstrips(data):
     print(f"  -> {PLOTDIR / 'tail_analysis.png'}")
 
 def main():
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--models", nargs="+", default=None,
+                   help="Which model keys to include (e.g. xgb gnn_tc_xcorr_v1). "
+                        "Default: all found in outputs/.")
+    args = p.parse_args()
+
     print("[PLOTS] loading ...", flush=True)
     data      = load_all()
     histories = load_histories()
+
+    if args.models is not None:
+        keep = set(args.models)
+        data      = {k: v for k, v in data.items()      if k in keep}
+        histories = {k: v for k, v in histories.items() if k in keep}
+        print(f"[PLOTS] filtering to: {sorted(data)}", flush=True)
 
     print("[PLOTS] generating ...", flush=True)
     plot_residuals(data, "residuals_all.png",  xlim_um=1500, title="residuals — test set (530 V, 29°)")
