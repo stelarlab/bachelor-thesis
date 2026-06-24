@@ -178,7 +178,7 @@ def main():
 
     device = _resolve_device(args.device)
     print(f"[GNN] device = {device}", flush=True)
-    model = StripModel(n_strip_feats=6, d_model=args.d_model, n_heads=args.n_heads,
+    model = StripModel(n_strip_feats=6, n_global_feats=7, d_model=args.d_model, n_heads=args.n_heads,
                        n_layers=args.n_layers, dropout=args.dropout).to(device)
     print(f"[GNN] parameters: {sum(p.numel() for p in model.parameters()):,}", flush=True)
 
