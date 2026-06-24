@@ -6,7 +6,7 @@ import torch.nn as nn
 
 
 class StripModel(nn.Module):
-    def __init__(self, n_strip_feats=6, n_global_feats=7, d_model=64, n_heads=4, n_layers=2, dropout=0.1):
+    def __init__(self, n_strip_feats=6, n_global_feats=3, d_model=64, n_heads=4, n_layers=2, dropout=0.1):
         super().__init__()
         self.strip_encoder = nn.Sequential(
             nn.Linear(n_strip_feats, d_model), nn.GELU(),

@@ -8,12 +8,8 @@ Strip features per hit (6):
   z_norm       — drift distance, normalized globally
   x_corr_rel   — muTPC-corrected position (x - z*tan(θ)) relative to anchor (Vogel §5.4.1)
 
-Global features per event (7):
+Global features per event (3):
   slope_norm, nonprec_norm, log1p(n_strips)
-  q_sum_norm   — total cluster charge (Landau-distributed)
-  q_mean_norm  — mean charge per strip
-  q_std_norm   — charge spread (cluster shape)
-  tc_corr_norm — TC correction value: t_cw_local * V_DRIFT * TAN_THETA (Vogel Gl. 5.40)
 
 Label: (true_xpos - anchor) / 5.0
 """
@@ -42,11 +38,6 @@ class Normalization:
     # per-event track stats
     slope_mean: float; slope_std: float
     nonprec_mean: float; nonprec_std: float
-    # per-event cluster aggregate stats
-    q_sum_mean: float; q_sum_std: float
-    q_evmean_mean: float; q_evmean_std: float
-    q_evstd_mean: float; q_evstd_std: float
-    tc_mean: float; tc_std: float
     # metadata
     theta_deg: float = 29.0
     tmax_ns: float = 100.0
@@ -65,15 +56,6 @@ class Normalization:
         ft = np.asarray(ak.flatten(ht))
         fz = ft * V_DRIFT
 
-        q_sum_ev  = np.asarray(ak.sum(hq, axis=1), dtype=np.float64)
-        valid     = q_sum_ev > 0
-        q_sum_ev  = q_sum_ev[valid]
-        q_mean_ev = np.asarray(ak.mean(hq, axis=1), dtype=np.float64)[valid]
-        q_std_ev  = np.asarray(ak.std(hq,  axis=1), dtype=np.float64)[valid]
-        t_cw_ev   = np.asarray(ak.sum(ht * hq, axis=1), dtype=np.float64)[valid] / q_sum_ev
-        t_min_ev  = np.asarray(ak.min(ht, axis=1),  dtype=np.float64)[valid]
-        tc_ev     = (t_cw_ev - t_min_ev) * V_DRIFT * TAN_THETA
-
         return cls(
             x_mean=float(fx.mean()),  x_std=float(fx.std()  + 1e-9),
             q_mean=float(fq.mean()),  q_std=float(fq.std()  + 1e-9),
@@ -81,17 +63,12 @@ class Normalization:
             z_mean=float(fz.mean()),  z_std=float(fz.std()  + 1e-9),
             slope_mean=float(sl.mean()),   slope_std=float(sl.std()   + 1e-9),
             nonprec_mean=float(np_.mean()), nonprec_std=float(np_.std() + 1e-9),
-            q_sum_mean=float(q_sum_ev.mean()),   q_sum_std=float(q_sum_ev.std()   + 1e-9),
-            q_evmean_mean=float(q_mean_ev.mean()), q_evmean_std=float(q_mean_ev.std() + 1e-9),
-            q_evstd_mean=float(q_std_ev.mean()),   q_evstd_std=float(q_std_ev.std()   + 1e-9),
-            tc_mean=float(tc_ev.mean()),  tc_std=float(tc_ev.std()  + 1e-9),
             theta_deg=float(theta_deg), tmax_ns=float(tmax_ns),
         )
 
     @classmethod
     def from_datasets(cls, datasets: list[tuple], theta_deg: float = 29.0) -> "Normalization":
         all_x, all_q, all_t, all_sl, all_np = [], [], [], [], []
-        all_qs, all_qm, all_qstd, all_tc = [], [], [], []
         for ev, tr in datasets:
             hx = ev.hits_x[tr]; hq = ev.hits_q[tr]; ht = ev.hits_t[tr]
             all_x.append(np.asarray(ak.flatten(hx)))
@@ -99,21 +76,10 @@ class Normalization:
             all_t.append(np.asarray(ak.flatten(ht)))
             all_sl.append(ev.track_slope[tr])
             all_np.append(ev.non_prec[tr])
-            q_sum_ev = np.asarray(ak.sum(hq, axis=1), dtype=np.float64)
-            valid    = q_sum_ev > 0
-            q_sum_ev = q_sum_ev[valid]
-            t_cw_ev  = np.asarray(ak.sum(ht * hq, axis=1), dtype=np.float64)[valid] / q_sum_ev
-            t_min_ev = np.asarray(ak.min(ht, axis=1), dtype=np.float64)[valid]
-            all_qs.append(q_sum_ev)
-            all_qm.append(np.asarray(ak.mean(hq, axis=1), dtype=np.float64)[valid])
-            all_qstd.append(np.asarray(ak.std(hq, axis=1), dtype=np.float64)[valid])
-            all_tc.append((t_cw_ev - t_min_ev) * V_DRIFT * TAN_THETA)
 
         fx=np.concatenate(all_x); fq=np.concatenate(all_q)
         ft=np.concatenate(all_t); fz=ft*V_DRIFT
         fs=np.concatenate(all_sl); fn=np.concatenate(all_np)
-        qs=np.concatenate(all_qs); qm=np.concatenate(all_qm)
-        qstd=np.concatenate(all_qstd); tc=np.concatenate(all_tc)
 
         return cls(
             x_mean=float(fx.mean()), x_std=float(fx.std()+1e-9),
@@ -122,10 +88,6 @@ class Normalization:
             z_mean=float(fz.mean()), z_std=float(fz.std()+1e-9),
             slope_mean=float(fs.mean()), slope_std=float(fs.std()+1e-9),
             nonprec_mean=float(fn.mean()), nonprec_std=float(fn.std()+1e-9),
-            q_sum_mean=float(qs.mean()),   q_sum_std=float(qs.std()+1e-9),
-            q_evmean_mean=float(qm.mean()), q_evmean_std=float(qm.std()+1e-9),
-            q_evstd_mean=float(qstd.mean()), q_evstd_std=float(qstd.std()+1e-9),
-            tc_mean=float(tc.mean()), tc_std=float(tc.std()+1e-9),
             theta_deg=float(theta_deg), tmax_ns=-1.0,
         )
 
@@ -191,10 +153,6 @@ class HitDataset(Dataset):
         else:
             anchor = float(np.median(x))
 
-        t_min  = float(t.min())
-        t_cw   = float((t * q).sum() / q_sum)
-        tc_val = (t_cw - t_min) * V_DRIFT * self.tan_theta   # Vogel Gl. 5.40
-
         x_norm     = (x - self.norm.x_mean) / self.norm.x_std
         q_norm     = (q - self.norm.q_mean) / self.norm.q_std
         t_norm     = (t - self.norm.t_mean) / self.norm.t_std
@@ -206,13 +164,9 @@ class HitDataset(Dataset):
                          axis=1).astype(np.float32)
 
         glob = np.array([
-            (self.slope[i] - self.norm.slope_mean)      / self.norm.slope_std,
-            (self.nonp[i]  - self.norm.nonprec_mean)     / self.norm.nonprec_std,
+            (self.slope[i] - self.norm.slope_mean)  / self.norm.slope_std,
+            (self.nonp[i]  - self.norm.nonprec_mean) / self.norm.nonprec_std,
             np.log1p(len(x)),
-            (q_sum              - self.norm.q_sum_mean)     / self.norm.q_sum_std,
-            (float(q.mean())    - self.norm.q_evmean_mean)  / self.norm.q_evmean_std,
-            (float(q.std())     - self.norm.q_evstd_mean)   / self.norm.q_evstd_std,
-            (tc_val             - self.norm.tc_mean)         / self.norm.tc_std,
         ], dtype=np.float32)
 
         label_local = (self.label_xpos[i] - anchor) / 5.0
