@@ -6,7 +6,7 @@ import torch.nn as nn
 
 
 class StripModel(nn.Module):
-    def __init__(self, n_strip_feats=6, n_global_feats=3, d_model=64, n_heads=4, n_layers=2, dropout=0.1):
+    def __init__(self, n_strip_feats=6, n_global_feats=7, d_model=64, n_heads=4, n_layers=2, dropout=0.1):
         super().__init__()
         self.strip_encoder = nn.Sequential(
             nn.Linear(n_strip_feats, d_model), nn.GELU(),
@@ -22,9 +22,8 @@ class StripModel(nn.Module):
         self.head = nn.Sequential(
             nn.Linear(4 * d_model, d_model), nn.GELU(), nn.Dropout(dropout),
             nn.Linear(d_model, d_model), nn.GELU(),
+            nn.Linear(d_model, 1),
         )
-        self.out_mu    = nn.Linear(d_model, 1)
-        self.out_logσ  = nn.Linear(d_model, 1)
 
     def forward(self, strip_feats, mask, global_feats):
         h = self.strip_encoder(strip_feats)
@@ -36,8 +35,5 @@ class StripModel(nn.Module):
         a      = self.attn_pool(h).squeeze(-1).masked_fill(~mask, float("-inf"))
         attn_h = (h * torch.softmax(a, dim=1).unsqueeze(-1)).sum(1)
 
-        z   = torch.cat([mean_h, max_h, attn_h, self.global_proj(global_feats)], dim=-1)
-        rep = self.head(z)
-        mu     = self.out_mu(rep).squeeze(-1)
-        log_sigma = self.out_logσ(rep).squeeze(-1)
-        return mu, log_sigma
+        z = torch.cat([mean_h, max_h, attn_h, self.global_proj(global_feats)], dim=-1)
+        return self.head(z).squeeze(-1)
