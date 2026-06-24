@@ -255,19 +255,6 @@ def main():
     model.load_state_dict(best_state)
     print(f"[GNN] best epoch = {best_ep}  σ₆₈ = {best_sigma68:.0f}µm", flush=True)
 
-    # bias correction: measure mean residual on val set, subtract from test predictions
-    model.eval()
-    va_preds, va_labels = [], []
-    with torch.no_grad():
-        for batch in tqdm(dl_va, desc="bias-cal", ncols=100):
-            for k in ("strip_feats", "mask", "global_feats", "x_med"):
-                batch[k] = batch[k].to(device, non_blocking=True)
-            pred = model(batch["strip_feats"], batch["mask"], batch["global_feats"])
-            va_preds.append((pred * 5.0 + batch["x_med"]).cpu().numpy())
-            va_labels.append(batch["label_xpos"].cpu().numpy())
-    bias = float(np.concatenate(va_preds).mean() - np.concatenate(va_labels).mean())
-    print(f"[GNN] val bias = {bias*1000:+.1f} µm  (will be subtracted from predictions)", flush=True)
-
     model.eval()
     preds_xpos, label_xpos, track_icepts = [], [], []
     with torch.no_grad():
@@ -279,7 +266,7 @@ def main():
             label_xpos.append(batch["label_xpos"].numpy())
             track_icepts.append(batch["track_icept"].numpy())
 
-    preds_xpos   = np.concatenate(preds_xpos) - bias
+    preds_xpos   = np.concatenate(preds_xpos)
     track_icepts = np.concatenate(track_icepts)
     _a = np.array(all_a); _b = np.array(all_b)
     preds_track  = preds_xpos * _a[domain_test] + _b[domain_test]
