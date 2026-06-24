@@ -91,7 +91,7 @@ def plot_residuals(data, filename, xlim_um=2000, title="Residuen-Vergleich"):
     for key in order:
         if key not in data:
             continue
-        res = data[key]
+        res = data[key] - np.median(data[key])   # center on median
         qc  = np.abs(res) < 2.0
         if qc.sum() < 10:
             continue
