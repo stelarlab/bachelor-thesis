@@ -186,11 +186,7 @@ def main():
     cosine  = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=max(args.epochs-10, 1))
     warmup  = torch.optim.lr_scheduler.LinearLR(optim, start_factor=0.1, end_factor=1.0, total_iters=10)
     sched   = torch.optim.lr_scheduler.SequentialLR(optim, [warmup, cosine], milestones=[10])
-    def nll_loss(mu, log_sigma, target):
-        # Gaussian NLL: 0.5 * [(y - mu)^2 / sigma^2 + log(sigma^2)]
-        # log_sigma clamped to [-6, 4] to keep sigma in [0.002, 55] road-units
-        log_sigma = log_sigma.clamp(-6.0, 4.0)
-        return (0.5 * ((target - mu) ** 2 * torch.exp(-2 * log_sigma) + 2 * log_sigma)).mean()
+    huber = nn.HuberLoss(delta=args.huber_delta)
 
     best_sigma68, best_state, best_ep = float("inf"), None, -1
     no_improve = 0
@@ -202,8 +198,8 @@ def main():
         for batch in tqdm(dl_tr, desc=f"ep {ep:2d} train", ncols=100, leave=False):
             for k in ("strip_feats", "mask", "global_feats", "label_local"):
                 batch[k] = batch[k].to(device, non_blocking=True)
-            mu, log_sigma = model(batch["strip_feats"], batch["mask"], batch["global_feats"])
-            loss = nll_loss(mu, log_sigma, batch["label_local"])
+            pred = model(batch["strip_feats"], batch["mask"], batch["global_feats"])
+            loss = huber(pred, batch["label_local"])
             optim.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optim.step()
@@ -218,9 +214,9 @@ def main():
             for batch in tqdm(dl_va, desc=f"ep {ep:2d} val  ", ncols=100, leave=False):
                 for k in ("strip_feats", "mask", "global_feats", "label_local", "x_med", "label_xpos"):
                     batch[k] = batch[k].to(device, non_blocking=True)
-                mu, log_sigma = model(batch["strip_feats"], batch["mask"], batch["global_feats"])
-                va_loss  += nll_loss(mu, log_sigma, batch["label_local"]).item() * batch["strip_feats"].size(0)
-                pred_xpos = mu * 5.0 + batch["x_med"]
+                pred      = model(batch["strip_feats"], batch["mask"], batch["global_feats"])
+                va_loss  += huber(pred, batch["label_local"]).item() * batch["strip_feats"].size(0)
+                pred_xpos = pred * 5.0 + batch["x_med"]
                 y_true    = batch["label_xpos"]
                 err       = pred_xpos - y_true
                 sq       += (err ** 2).sum().item()
@@ -260,19 +256,17 @@ def main():
     print(f"[GNN] best epoch = {best_ep}  σ₆₈ = {best_sigma68:.0f}µm", flush=True)
 
     model.eval()
-    preds_xpos, pred_sigmas, label_xpos, track_icepts = [], [], [], []
+    preds_xpos, label_xpos, track_icepts = [], [], []
     with torch.no_grad():
         for batch in tqdm(dl_te, desc="test", ncols=100):
             for k in ("strip_feats", "mask", "global_feats", "x_med"):
                 batch[k] = batch[k].to(device, non_blocking=True)
-            mu, log_sigma = model(batch["strip_feats"], batch["mask"], batch["global_feats"])
-            preds_xpos.append((mu * 5.0 + batch["x_med"]).cpu().numpy())
-            pred_sigmas.append((torch.exp(log_sigma) * 5.0).cpu().numpy())  # sigma in mm
+            pred = model(batch["strip_feats"], batch["mask"], batch["global_feats"])
+            preds_xpos.append((pred * 5.0 + batch["x_med"]).cpu().numpy())
             label_xpos.append(batch["label_xpos"].numpy())
             track_icepts.append(batch["track_icept"].numpy())
 
     preds_xpos   = np.concatenate(preds_xpos)
-    pred_sigmas  = np.concatenate(pred_sigmas)
     track_icepts = np.concatenate(track_icepts)
     _a = np.array(all_a); _b = np.array(all_b)
     preds_track  = preds_xpos * _a[domain_test] + _b[domain_test]
@@ -281,7 +275,6 @@ def main():
     pt_path   = OUT / f"{args.out_prefix}_model.pt"
     norm_path = OUT / f"{args.out_prefix}_norm.json"
     np.savez_compressed(npz_path, y_pred=preds_track, y_true=track_icepts,
-                        pred_sigma=pred_sigmas,
                         domain=domain_test, history=np.array(history))
     torch.save(model.state_dict(), pt_path)
     norm.save(norm_path)
