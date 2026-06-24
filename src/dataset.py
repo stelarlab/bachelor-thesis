@@ -1,10 +1,10 @@
 """PyTorch Dataset for strip-hit events from the ATLAS strip detector.
 
 Strip features per hit (6):
+  x_norm       — absolute position, normalized globally
   q_norm       — charge, normalized globally
+  t_norm       — time, normalized globally
   x_rel        — position relative to TC-anchor, in road units (/5 mm)
-  x_rel_xmin   — position relative to cluster x_min (/5 mm); no absolute position info
-  t_rel        — time relative to t_min of cluster, scaled by global t_std; no trigger offset
   z_norm       — drift distance, normalized globally
   x_corr_rel   — muTPC-corrected position (x - z*tan(θ)) relative to anchor (Vogel §5.4.1)
 
@@ -195,15 +195,14 @@ class HitDataset(Dataset):
         t_cw   = float((t * q).sum() / q_sum)
         tc_val = (t_cw - t_min) * V_DRIFT * self.tan_theta   # Vogel Gl. 5.40
 
-        # strip features — no absolute position, no trigger offset
-        q_norm       = (q - self.norm.q_mean) / self.norm.q_std
-        x_rel        = (x - anchor) / 5.0
-        x_rel_xmin   = (x - float(x.min())) / 5.0
-        t_rel        = (t - t_min) / self.norm.t_std
-        z_norm       = (z - self.norm.z_mean) / self.norm.z_std
-        x_corr_rel   = ((x - z * self.tan_theta) - anchor) / 5.0
+        x_norm     = (x - self.norm.x_mean) / self.norm.x_std
+        q_norm     = (q - self.norm.q_mean) / self.norm.q_std
+        t_norm     = (t - self.norm.t_mean) / self.norm.t_std
+        z_norm     = (z - self.norm.z_mean) / self.norm.z_std
+        x_rel      = (x - anchor) / 5.0
+        x_corr_rel = ((x - z * self.tan_theta) - anchor) / 5.0
 
-        strip = np.stack([q_norm, x_rel, x_rel_xmin, t_rel, z_norm, x_corr_rel],
+        strip = np.stack([x_norm, q_norm, t_norm, x_rel, z_norm, x_corr_rel],
                          axis=1).astype(np.float32)
 
         glob = np.array([
