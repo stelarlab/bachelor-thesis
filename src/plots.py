@@ -104,10 +104,11 @@ def plot_residuals(data, filename, xlim_um=2000, title="Residuen-Vergleich", sho
         counts, _ = np.histogram(res[mask] * 1000, bins=bins)
         ax.hist(res[mask] * 1000, bins=bins,
                 histtype="step", lw=1.8, color=color,
-                label=f"{label}  σ_core={fr.sigma_core_um:.0f} µm  σ₆₈={fr.sigma_68_um:.0f} µm  eff={qc.mean()*100:.0f}%")
+                label=f"{label}  σ_core={fr.sigma_core_um:.0f} µm  σ₆₈={fr.sigma_68_um:.0f} µm  µ={fr.mu_core_um:+.0f} µm  eff={qc.mean()*100:.0f}%")
 
         if show_fit:
             def _g(x, a, mu, s): return a * np.exp(-0.5 * ((x - mu) / s) ** 2)
+<<<<<<< HEAD
             fit_range_um = fr.fit_range_mm * 1000.0
             x_fine = np.linspace(-fit_range_um, fit_range_um, 2000)
             # scale amplitudes from fit (per-bin counts) to match the plotted histogram
@@ -121,6 +122,22 @@ def plot_residuals(data, filename, xlim_um=2000, title="Residuen-Vergleich", sho
             ax.plot(x_fine, sum_curve,  color=color, lw=2.0, ls="-",  alpha=0.9)
             ax.plot(x_fine, core_curve, color=color, lw=1.2, ls="--", alpha=0.6)
             ax.plot(x_fine, tail_curve, color=color, lw=1.2, ls=":",  alpha=0.5)
+=======
+
+            x_fine = np.linspace(-fit_range_um, fit_range_um, 1000)
+            core_curve = _g(x_fine, ac, mc, sc)
+            tail_curve = _g(x_fine, at, mt, st)
+            total_curve = core_curve + tail_curve
+            y_min = 1.0
+            core_curve  = np.where(core_curve  >= y_min, core_curve,  np.nan)
+            tail_curve  = np.where(tail_curve  >= y_min, tail_curve,  np.nan)
+            total_curve = np.where(total_curve >= y_min, total_curve, np.nan)
+
+            ax.plot(x_fine, total_curve, color=color, lw=2.0, ls="-",  alpha=0.9)
+            ax.plot(x_fine, core_curve,  color=color, lw=1.2, ls="--", alpha=0.6)
+            ax.plot(x_fine, tail_curve,  color=color, lw=1.2, ls=":",  alpha=0.6)
+            ax.axvline(mc, color=color, lw=1.0, ls="-.", alpha=0.5)
+>>>>>>> main
 
     ax.axvline(0, color="black", lw=0.6, ls="--")
     ax.set_xlabel("y_pred − y_true  [µm]")
@@ -274,17 +291,19 @@ def plot_residual_vs_nstrips(data):
     bins = np.linspace(-800, 800, 100)
     for ax, (key, title) in zip(axes, [("xgb", "XGBoost"), ("gnn", "GNN")]):
         if key not in data:
-            ax.set_visible(False); continue
-        res = data[key] * 1000
+            ax.set_visible(False)
+            continue
+        res = data[key] * 1000     
         qc  = np.abs(res) < 2000
         ax.hist(res[qc], bins=bins, histtype="stepfilled", alpha=0.6,
                 color=get_color(key), label="all events")
-
         tail = (np.abs(res) > 500) & (np.abs(res) < 2000)
         ax.hist(res[tail], bins=bins, histtype="step", lw=1.5,
                 color="red", label=f"tails (|res|>500µm): {tail.mean()*100:.1f}%")
-        ax.set_xlabel("residual [µm]"); ax.set_ylabel("entries")
-        ax.set_title(title); ax.legend(fontsize=8)
+        ax.set_xlabel("residual [µm]")
+        ax.set_ylabel("entries")
+        ax.set_title(title)
+        ax.legend(fontsize=8)
     plt.tight_layout()
     fig.savefig(PLOTDIR / "tail_analysis.png", dpi=150)
     plt.close(fig)
