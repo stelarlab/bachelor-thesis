@@ -21,9 +21,14 @@ class FitResult:
     sigma_tail_um:     float   # width of the tail Gaussian [um]
     sigma_weighted_um: float   # integral-weighted sigma (Eq. 5.32) [um]
     mu_core_um:        float   # mean of the core Gaussian [um]
+    mu_tail_um:        float   # mean of the tail Gaussian [um]
+    amp_core:          float   # peak amplitude of the core Gaussian [counts]
+    amp_tail:          float   # peak amplitude of the tail Gaussian [counts]
     sigma_68_um:       float   # robust 68% half-width (model-free) [um]
     rms_um:            float   # RMS of all finite residuals [um]
     n_entries:         int
+    fit_range_mm:      float   # fit was performed within ±this value [mm]
+    bin_width_mm:      float   # histogram bin width used for the fit [mm]
 
 
 def _gauss(x, a, mu, s):
@@ -35,7 +40,7 @@ def _double_gauss(x, ac, mc, sc, at, mt, st):
 
 def fit_residuals(residuals_mm: np.ndarray,
                   fit_range_mm: float = 0.5,
-                  bins: int = 240) -> FitResult:
+                  bins: int = 200) -> FitResult:
     """Fit a double Gaussian to the residual distribution.
 
     sigma_68 is always computed model-free from quantiles — it is the
@@ -69,12 +74,18 @@ def fit_residuals(residuals_mm: np.ndarray,
     it = at * st * np.sqrt(2 * np.pi)
     sigma_w = (ic*sc + it*st) / (ic + it) * 1000.0 if (ic + it) > 0 else float("nan")
 
+    bw = 2 * fit_range_mm / bins
     return FitResult(
         sigma_core_um     = float(sc) * 1000.0,
         sigma_tail_um     = float(st) * 1000.0,
         sigma_weighted_um = float(sigma_w),
         mu_core_um        = float(mc) * 1000.0,
+        mu_tail_um        = float(mt) * 1000.0,
+        amp_core          = float(ac),
+        amp_tail          = float(at),
         sigma_68_um       = float(s68),
         rms_um            = rms_um,
         n_entries         = int(np.isfinite(residuals_mm).sum()),
+        fit_range_mm      = float(fit_range_mm),
+        bin_width_mm      = float(bw),
     )
