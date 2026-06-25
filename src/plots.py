@@ -83,36 +83,49 @@ def load_histories():
             histories[stem] = d["history"]
     return histories
 
-def plot_residuals(data, filename, xlim_um=2000, title="Residuen-Vergleich"):
+def plot_residuals(data, filename, xlim_um=2000, title="Residuen-Vergleich", show_fit=False):
     bin_width = 20  # µm per bin
     bins = np.arange(-xlim_um, xlim_um + bin_width, bin_width)
+    centers = 0.5 * (bins[:-1] + bins[1:])
     fig, ax = plt.subplots(figsize=(10, 5))
     order = ["cm", "tc", "xgb"] + [k for k in data if k not in ("cm", "tc", "xgb")]
     for key in order:
         if key not in data:
             continue
-        res = data[key] - np.median(data[key])   # center on median
+        res = data[key] - np.median(data[key])
         qc  = np.abs(res) < 2.0
         if qc.sum() < 10:
             continue
         fr    = fit_residuals(res[qc], fit_range_mm=0.5)
         color = get_color(key)
         label = LABELS.get(key, key)
-    
+
         mask = np.abs(res * 1000) <= xlim_um
-        n_outside = (~mask).sum()
+        counts, _ = np.histogram(res[mask] * 1000, bins=bins)
         ax.hist(res[mask] * 1000, bins=bins,
                 histtype="step", lw=1.8, color=color,
-                label=f"{label}  σ={fr.sigma_core_um:.0f} µm  eff={qc.mean()*100:.0f}%")
+                label=f"{label}  σ_core={fr.sigma_core_um:.0f} µm  σ₆₈={fr.sigma_68_um:.0f} µm  eff={qc.mean()*100:.0f}%")
 
-    ax.axvline( 2000, color="gray", lw=1.0, ls=":", alpha=0.7)
-    ax.axvline(-2000, color="gray", lw=1.0, ls=":", alpha=0.7)
+        if show_fit:
+            fit_range_um = 500.0
+            fit_mask = np.abs(centers) <= fit_range_um
+            ac = counts[fit_mask].max()
+            sc = fr.sigma_core_um
+            mc = fr.mu_core_um
+            at = ac * 0.2
+            st = fr.sigma_tail_um
+            mt = mc
+
+            def _g(x, a, mu, s): return a * np.exp(-0.5 * ((x - mu) / s) ** 2)
+            x_fine = np.linspace(-fit_range_um, fit_range_um, 1000)
+            core_curve = _g(x_fine, ac, mc, sc)
+            tail_curve = _g(x_fine, at, mt, st)
+            ax.plot(x_fine, core_curve + tail_curve, color=color, lw=2.0, ls="-",  alpha=0.9)
+            ax.plot(x_fine, core_curve,              color=color, lw=1.2, ls="--", alpha=0.6)
+            ax.plot(x_fine, tail_curve,              color=color, lw=1.2, ls=":",  alpha=0.6)
+            ax.axvline(mc, color=color, lw=1.0, ls="-.", alpha=0.5)
+
     ax.axvline(0, color="black", lw=0.6, ls="--")
-
-    ax.axvspan(-xlim_um, -2000, alpha=0.04, color="red")
-    ax.axvspan( 2000,  xlim_um, alpha=0.04, color="red")
-    ax.text( 1980, ax.get_ylim()[0] * 1.5, "±2 mm", ha="right", va="bottom",
-             fontsize=8, color="gray")
     ax.set_xlabel("y_pred − y_true  [µm]")
     ax.set_ylabel("entries")
     ax.set_yscale("log")
@@ -286,6 +299,8 @@ def main():
     p.add_argument("--models", nargs="+", default=None,
                    help="Which model keys to include (e.g. xgb gnn_tc_xcorr_v1). "
                         "Default: all found in outputs/.")
+    p.add_argument("--fit", action="store_true",
+                   help="Overlay double-Gaussian fit on residual plots.")
     args = p.parse_args()
 
     print("[PLOTS] loading ...", flush=True)
@@ -299,8 +314,8 @@ def main():
         print(f"[PLOTS] filtering to: {sorted(data)}", flush=True)
 
     print("[PLOTS] generating ...", flush=True)
-    plot_residuals(data, "residuals_all.png",  xlim_um=1500, title="residuals — test set (530 V, 29°)")
-    plot_residuals(data, "residuals_zoom.png", xlim_um=500,  title="residuals — core region ±500 µm")
+    plot_residuals(data, "residuals_all.png",  xlim_um=1500, title="residuals — test set (530 V, 29°)",  show_fit=args.fit)
+    plot_residuals(data, "residuals_zoom.png", xlim_um=500,  title="residuals — core region ±500 µm",   show_fit=args.fit)
     plot_efficiency(data)
     plot_history(histories)
     plot_history_metrics(histories)
