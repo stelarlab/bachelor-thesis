@@ -108,22 +108,6 @@ def plot_residuals(data, filename, xlim_um=2000, title="Residuen-Vergleich", sho
 
         if show_fit:
             def _g(x, a, mu, s): return a * np.exp(-0.5 * ((x - mu) / s) ** 2)
-<<<<<<< HEAD
-            fit_range_um = fr.fit_range_mm * 1000.0
-            x_fine = np.linspace(-fit_range_um, fit_range_um, 2000)
-            # scale amplitudes from fit (per-bin counts) to match the plotted histogram
-            # the fit was done on ±fit_range_mm, the plot may use a different xlim
-            scale = bin_width / (fr.bin_width_mm * 1000.0)
-            core_curve = _g(x_fine, fr.amp_core * scale, fr.mu_core_um, fr.sigma_core_um)
-            tail_curve = _g(x_fine, fr.amp_tail * scale, fr.mu_tail_um, fr.sigma_tail_um)
-            sum_curve  = np.clip(core_curve + tail_curve, 0.1, None)
-            core_curve = np.clip(core_curve, 0.1, None)
-            tail_curve = np.clip(tail_curve, 0.1, None)
-            ax.plot(x_fine, sum_curve,  color=color, lw=2.0, ls="-",  alpha=0.9)
-            ax.plot(x_fine, core_curve, color=color, lw=1.2, ls="--", alpha=0.6)
-            ax.plot(x_fine, tail_curve, color=color, lw=1.2, ls=":",  alpha=0.5)
-=======
-
             x_fine = np.linspace(-fit_range_um, fit_range_um, 1000)
             core_curve = _g(x_fine, ac, mc, sc)
             tail_curve = _g(x_fine, at, mt, st)
@@ -137,8 +121,7 @@ def plot_residuals(data, filename, xlim_um=2000, title="Residuen-Vergleich", sho
             ax.plot(x_fine, core_curve,  color=color, lw=1.2, ls="--", alpha=0.6)
             ax.plot(x_fine, tail_curve,  color=color, lw=1.2, ls=":",  alpha=0.6)
             ax.axvline(mc, color=color, lw=1.0, ls="-.", alpha=0.5)
->>>>>>> main
-
+            
     ax.axvline(0, color="black", lw=0.6, ls="--")
     ax.set_xlabel("y_pred − y_true  [µm]")
     ax.set_ylabel("entries")
