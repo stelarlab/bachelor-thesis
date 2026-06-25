@@ -117,7 +117,12 @@ def plot_residuals(data, filename, xlim_um=2000, title="Residuen-Vergleich", sho
             mt = mc
 
             def _g(x, a, mu, s): return a * np.exp(-0.5 * ((x - mu) / s) ** 2)
-            x_fine = np.linspace(-fit_range_um, fit_range_um, 1000)
+
+            if mc >= 0:
+                x_fine = np.linspace(0, fit_range_um, 500)
+            else:
+                x_fine = np.linspace(-fit_range_um, 0, 500)
+
             core_curve = _g(x_fine, ac, mc, sc)
             tail_curve = _g(x_fine, at, mt, st)
             ax.plot(x_fine, core_curve + tail_curve, color=color, lw=2.0, ls="-",  alpha=0.9)
@@ -277,17 +282,19 @@ def plot_residual_vs_nstrips(data):
     bins = np.linspace(-800, 800, 100)
     for ax, (key, title) in zip(axes, [("xgb", "XGBoost"), ("gnn", "GNN")]):
         if key not in data:
-            ax.set_visible(False); continue
-        res = data[key] * 1000
+            ax.set_visible(False)
+            continue
+        res = data[key] * 1000     
         qc  = np.abs(res) < 2000
         ax.hist(res[qc], bins=bins, histtype="stepfilled", alpha=0.6,
                 color=get_color(key), label="all events")
-
         tail = (np.abs(res) > 500) & (np.abs(res) < 2000)
         ax.hist(res[tail], bins=bins, histtype="step", lw=1.5,
                 color="red", label=f"tails (|res|>500µm): {tail.mean()*100:.1f}%")
-        ax.set_xlabel("residual [µm]"); ax.set_ylabel("entries")
-        ax.set_title(title); ax.legend(fontsize=8)
+        ax.set_xlabel("residual [µm]")
+        ax.set_ylabel("entries")
+        ax.set_title(title)
+        ax.legend(fontsize=8)
     plt.tight_layout()
     fig.savefig(PLOTDIR / "tail_analysis.png", dpi=150)
     plt.close(fig)
