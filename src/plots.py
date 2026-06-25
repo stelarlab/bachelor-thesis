@@ -118,9 +118,11 @@ def plot_residuals(data, filename, xlim_um=2000, title="Residuen-Vergleich", sho
 
             def _g(x, a, mu, s): return a * np.exp(-0.5 * ((x - mu) / s) ** 2)
 
-            x_fine = np.linspace(-fit_range_um, fit_range_um, 1000)
-            core_curve = np.maximum(_g(x_fine, ac, mc, sc), 0)
-            tail_curve = np.maximum(_g(x_fine, at, mt, st), 0)
+            plot_range = min(fit_range_um, 4.0 * st)
+            x_fine = np.linspace(-plot_range, plot_range, 1000)
+
+            core_curve = _g(x_fine, ac, mc, sc)
+            tail_curve = _g(x_fine, at, mt, st)
             ax.plot(x_fine, core_curve + tail_curve, color=color, lw=2.0, ls="-",  alpha=0.9)
             ax.plot(x_fine, core_curve,              color=color, lw=1.2, ls="--", alpha=0.6)
             ax.plot(x_fine, tail_curve,              color=color, lw=1.2, ls=":",  alpha=0.6)
