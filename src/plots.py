@@ -104,7 +104,7 @@ def plot_residuals(data, filename, xlim_um=2000, title="Residuen-Vergleich", sho
         counts, _ = np.histogram(res[mask] * 1000, bins=bins)
         ax.hist(res[mask] * 1000, bins=bins,
                 histtype="step", lw=1.8, color=color,
-                label=f"{label}  σ_core={fr.sigma_core_um:.0f} µm  σ₆₈={fr.sigma_68_um:.0f} µm  eff={qc.mean()*100:.0f}%")
+                label=f"{label}  σ_core={fr.sigma_core_um:.0f} µm  σ₆₈={fr.sigma_68_um:.0f} µm  µ={fr.mu_core_um:+.0f} µm  eff={qc.mean()*100:.0f}%")
 
         if show_fit:
             fit_range_um = 500.0
