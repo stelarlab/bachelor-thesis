@@ -1,0 +1,83 @@
+datasets:
+
+  # Main training dataset (H4, Roman beam test)
+  - name: h4_29deg_530V_100ns
+    path: /project/etp4/L.Chrusciel/Datensatz/Data_for_Roman_29deg_530V_100ns_x9.root
+    theta_deg: 29.0
+    voltage_V: 530
+    tmax_ns:   100.0
+    layer:     3
+    notes:     "primary training set"
+
+  # H4 GIF datasets (same angle, different voltages/shaping times)
+  - name: h4_gif_29deg_530V_100ns
+    path: /project/etp4/L.Chrusciel/Datensatz/H4_GIF/Data_For_Lars_29deg_att0_530V_100ns.root
+    theta_deg: 29.0
+    voltage_V: 530
+    tmax_ns:   100.0
+    layer:     3
+
+  - name: h4_gif_29deg_530V_200ns
+    path: /project/etp4/L.Chrusciel/Datensatz/H4_GIF/Data_For_Lars_29deg_att0_530V_200ns.root
+    theta_deg: 29.0
+    voltage_V: 530
+    tmax_ns:   200.0
+    layer:     3
+
+  - name: h4_gif_29deg_520V_100ns
+    path: /project/etp4/L.Chrusciel/Datensatz/H4_GIF/Data_For_Lars_29deg_att0_520V_100ns.root
+    theta_deg: 29.0
+    voltage_V: 520
+    tmax_ns:   100.0
+    layer:     3
+
+  - name: h4_gif_29deg_520V_200ns
+    path: /project/etp4/L.Chrusciel/Datensatz/H4_GIF/Data_For_Lars_29deg_att0_520V_200ns.root
+    theta_deg: 29.0
+    voltage_V: 520
+    tmax_ns:   200.0
+    layer:     3
+
+  # H8 angular scan (layer 3 only — time calibration valid)
+  - name: h8_0deg_530V_100ns
+    path: /project/etp4/L.Chrusciel/Datensatz/H8_angularScan/H8_0deg_530V_100ns.root
+    theta_deg: 0.0
+    voltage_V: 530
+    tmax_ns:   100.0
+    layer:     3
+    notes:     "alignment not perfect, results suboptimal"
+
+  - name: h8_10deg_530V_100ns
+    path: /project/etp4/L.Chrusciel/Datensatz/H8_angularScan/H8_10deg_530V_100ns.root
+    theta_deg: 10.0
+    voltage_V: 530
+    tmax_ns:   100.0
+    layer:     3
+
+  - name: h8_15deg_530V_100ns
+    path: /project/etp4/L.Chrusciel/Datensatz/H8_angularScan/H8_15deg_530V_100ns.root
+    theta_deg: 15.0
+    voltage_V: 530
+    tmax_ns:   100.0
+    layer:     3
+
+  - name: h8_20deg_530V_100ns
+    path: /project/etp4/L.Chrusciel/Datensatz/H8_angularScan/H8_20deg_530V_100ns.root
+    theta_deg: 20.0
+    voltage_V: 530
+    tmax_ns:   100.0
+    layer:     3
+
+  - name: h8_24deg_530V_100ns
+    path: /project/etp4/L.Chrusciel/Datensatz/H8_angularScan/H8_24deg_530V_100ns.root
+    theta_deg: 24.0
+    voltage_V: 530
+    tmax_ns:   100.0
+    layer:     3
+
+  - name: h8_29deg_530V_100ns
+    path: /project/etp4/L.Chrusciel/Datensatz/H8_angularScan/H8_29deg_530V_100ns.root
+    theta_deg: 29.0
+    voltage_V: 530
+    tmax_ns:   100.0
+    layer:     3
