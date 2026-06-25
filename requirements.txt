@@ -7,4 +7,5 @@ pandas
 matplotlib
 scipy
 tqdm
+pyyaml
 # optional: graphviz (only for analysis/analyse_xgb_tails.py tree images)
