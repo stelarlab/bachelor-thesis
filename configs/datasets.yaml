@@ -1,5 +1,6 @@
 datasets:
 
+  # Main training dataset (H4, Roman beam test)
   - name: h4_29deg_530V_100ns
     path: /project/etp4/L.Chrusciel/Datensatz/Data_for_Roman_29deg_530V_100ns_x9.root
     theta_deg: 29.0
