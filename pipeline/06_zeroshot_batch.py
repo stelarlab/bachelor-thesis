@@ -187,10 +187,14 @@ def main():
     state = torch.load(args.model, map_location="cpu")
     n_strip_feats  = state["strip_encoder.0.weight"].shape[1]
     n_global_feats = state["global_proj.weight"].shape[1]
-    model = StripModel(n_strip_feats=n_strip_feats,
-                       n_global_feats=n_global_feats).to(device)
+    d_model  = state["strip_encoder.0.weight"].shape[0]
+    n_layers = sum(1 for k in state if k.startswith("transformer.layers.") and k.endswith(".norm1.weight"))
+    n_heads  = d_model // 16  # convention: 4 for d=64, 8 for d=128
+    model = StripModel(n_strip_feats=n_strip_feats, n_global_feats=n_global_feats,
+                       d_model=d_model, n_heads=n_heads, n_layers=n_layers).to(device)
     model.load_state_dict(state)
-    print(f"[Batch] model: {n_strip_feats} strip feats  {n_global_feats} global feats", flush=True)
+    print(f"[Batch] model: {n_strip_feats} strip feats  {n_global_feats} global feats  "
+          f"d={d_model}  heads={n_heads}  layers={n_layers}", flush=True)
 
     detector_shift = load_detector_shift(OUT)
 
