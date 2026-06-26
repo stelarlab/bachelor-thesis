@@ -24,7 +24,7 @@ class EventArrays:
     hits_q: ak.Array       # strip charges per event [ADC]
     hits_t: ak.Array       # strip times per event [ns]
     n_hits: np.ndarray     # number of strips per event
-    track_icept: np.ndarray   # track extrapolation to layer 6, tracker frame [mm]
+    track_icept: np.ndarray   # track extrapolation, tracker frame [mm]
     track_slope: np.ndarray   # track slope (non-precision direction)
     non_prec: np.ndarray      # non-precision coordinate [mm]
 
@@ -32,15 +32,32 @@ class EventArrays:
     def n_events(self) -> int:
         return len(self.track_icept)
 
-def load_events(path: Path | str, max_events: int | None = None) -> EventArrays:
+def load_events(path: Path | str, max_events: int | None = None,
+                layer: int | None = None) -> EventArrays:
     f = uproot.open(str(path))
     t = f["ana"]
-    arr = t.arrays(library="ak") if max_events is None else t.arrays(entry_stop=max_events, library="ak")
+    branches = ["out_xpos", "out_charge", "out_time",
+                "out_track_icept", "out_track_slope", "out_non_prec"]
+    if layer is not None:
+        branches.append("out_layer")
+    kw = dict(library="ak")
+    if max_events is not None:
+        kw["entry_stop"] = max_events
+    arr = t.arrays(branches, **kw)
+    if layer is not None:
+        m = arr["out_layer"] == layer
+        hits_x = arr["out_xpos"][m]
+        hits_q = arr["out_charge"][m]
+        hits_t = arr["out_time"][m]
+    else:
+        hits_x = arr["out_xpos"]
+        hits_q = arr["out_charge"]
+        hits_t = arr["out_time"]
     return EventArrays(
-        hits_x=arr["out_xpos"],
-        hits_q=arr["out_charge"],
-        hits_t=arr["out_time"],
-        n_hits=np.asarray(ak.num(arr["out_xpos"])),
+        hits_x=hits_x,
+        hits_q=hits_q,
+        hits_t=hits_t,
+        n_hits=np.asarray(ak.num(hits_x)),
         track_icept=np.asarray(arr["out_track_icept"]),
         track_slope=np.asarray(arr["out_track_slope"]),
         non_prec=np.asarray(arr["out_non_prec"]),
@@ -87,7 +104,6 @@ def save_detector_shift(out_dir: Path | str, mu_shift_mm: float, **extra) -> Pat
     return p
 
 def load_detector_shift(out_dir: Path | str) -> float:
-    # returns 0.0 if no shift file exists so the pipeline runs without Phase 0
     p = detector_shift_path(out_dir)
     if not p.exists():
         return 0.0
