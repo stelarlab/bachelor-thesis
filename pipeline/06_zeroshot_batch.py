@@ -86,9 +86,11 @@ def eval_dataset(cfg, model, norm, n_strip_feats, device, out_prefix, detector_s
     path      = Path(cfg["path"])
     theta_deg = float(cfg.get("theta_deg", 29.0))
 
-    print(f"\n[Batch] === {name}  θ={theta_deg}°  {path.name} ===", flush=True)
+    layer     = cfg.get("layer", None)
 
-    ev = load_events(path)
+    print(f"\n[Batch] === {name}  θ={theta_deg}°  layer={layer}  {path.name} ===", flush=True)
+
+    ev = load_events(path, layer=layer)
     a, b = learn_frame_transform(ev)
     all_idx = filter_road_empty(ev, a, b, detector_shift_mm=detector_shift)
     n_total = ev.n_events
