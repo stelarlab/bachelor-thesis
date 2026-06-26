@@ -1,44 +1,43 @@
 datasets:
 
-  # Main training dataset (H4, Roman beam test)
   - name: h4_29deg_530V_100ns
     path: /project/etp4/L.Chrusciel/Datensatz/Data_for_Roman_29deg_530V_100ns_x9.root
     theta_deg: 29.0
     voltage_V: 530
     tmax_ns:   100.0
-    layer:     3
+    layer:     7
     notes:     "primary training set"
 
-  # H4 GIF datasets (same angle, different voltages/shaping times)
+  # H4 GIF — layer 7 corresponds to layer 3 in H8 (same physical detector, different numbering)
   - name: h4_gif_29deg_530V_100ns
     path: /project/etp4/L.Chrusciel/Datensatz/H4_GIF/Data_For_Lars_29deg_att0_530V_100ns.root
     theta_deg: 29.0
     voltage_V: 530
     tmax_ns:   100.0
-    layer:     3
+    layer:     7
 
   - name: h4_gif_29deg_530V_200ns
     path: /project/etp4/L.Chrusciel/Datensatz/H4_GIF/Data_For_Lars_29deg_att0_530V_200ns.root
     theta_deg: 29.0
     voltage_V: 530
     tmax_ns:   200.0
-    layer:     3
+    layer:     7
 
   - name: h4_gif_29deg_520V_100ns
     path: /project/etp4/L.Chrusciel/Datensatz/H4_GIF/Data_For_Lars_29deg_att0_520V_100ns.root
     theta_deg: 29.0
     voltage_V: 520
     tmax_ns:   100.0
-    layer:     3
+    layer:     7
 
   - name: h4_gif_29deg_520V_200ns
     path: /project/etp4/L.Chrusciel/Datensatz/H4_GIF/Data_For_Lars_29deg_att0_520V_200ns.root
     theta_deg: 29.0
     voltage_V: 520
     tmax_ns:   200.0
-    layer:     3
+    layer:     7
 
-  # H8 angular scan (layer 3 only — time calibration valid)
+  # H8 angular scan — layer 3 only; stereo layers 4+5 not aligned, others lack time calibration
   - name: h8_0deg_530V_100ns
     path: /project/etp4/L.Chrusciel/Datensatz/H8_angularScan/H8_0deg_530V_100ns.root
     theta_deg: 0.0
