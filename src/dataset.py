@@ -8,14 +8,15 @@ Strip features per hit (6):
   z_norm       — drift distance, normalized globally
   x_corr_rel   — muTPC-corrected position (x - z*tan(θ)) relative to anchor (Vogel §5.4.1)
 
-Global features per event (7):
+Global features per event (5):
   slope_norm       — track slope (non-precision direction), normalized
   nonprec_norm     — non-precision coordinate, normalized
   log1p(n_strips)  — cluster size
-  sin(θ)           — sine of incidence angle (Vogel §5.4.2)
-  cos(θ)           — cosine of incidence angle
   muTPC_slope_norm — slope of linear fit to (x_strip, z_strip), normalized (Vogel Gl. 5.37)
-  q_asym           — charge asymmetry (q_back - q_front) / q_total (Vogel §5.4, Fig. 5.10)
+  q_asym           — (q_back - q_front) / q_total, charge asymmetry (Vogel §5.4, Fig. 5.10)
+
+Note: sin/cos(θ) are intentionally excluded here. They are constant within a single-angle
+training run and carry no discriminative information until multi-angle training is set up.
 
 Label: (true_xpos - anchor) / 5.0
 """
@@ -197,31 +198,23 @@ class HitDataset(Dataset):
         strip = np.stack([x_norm, q_norm, t_norm, x_rel, z_norm, x_corr_rel],
                          axis=1).astype(np.float32)
 
-        # muTPC slope from cluster hits (Vogel Gl. 5.37)
         if len(x) >= 2 and x.std() > 1e-6:
             muTPC_slope = float(np.polyfit(x, z, 1)[0])
         else:
             muTPC_slope = 0.0
 
-        # charge asymmetry: (q_back - q_front) / q_total (Vogel §5.4, Fig. 5.10)
         if len(q) >= 2:
             order_x = np.argsort(x)
             q_sorted = q[order_x]
             half = len(q_sorted) // 2
-            q_front = q_sorted[:half].sum()
-            q_back  = q_sorted[half:].sum()
-            q_asym  = float((q_back - q_front) / (q_sum + 1e-9))
+            q_asym = float((q_sorted[half:].sum() - q_sorted[:half].sum()) / (q_sum + 1e-9))
         else:
             q_asym = 0.0
-
-        theta_rad = math.radians(self.norm.theta_deg)
 
         glob = np.array([
             (self.slope[i] - self.norm.slope_mean)   / self.norm.slope_std,
             (self.nonp[i]  - self.norm.nonprec_mean) / self.norm.nonprec_std,
             np.log1p(len(x)),
-            math.sin(theta_rad),
-            math.cos(theta_rad),
             (muTPC_slope - self.norm.muTPC_slope_mean) / self.norm.muTPC_slope_std,
             q_asym,
         ], dtype=np.float32)
