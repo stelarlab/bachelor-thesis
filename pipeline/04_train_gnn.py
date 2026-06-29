@@ -1,11 +1,15 @@
 """Train the strip self-attention GNN for position reconstruction.
 
-Flags:
-  --data A B ...      one file = single-domain; multiple = multi-domain
-  --theta 29 15 ...   one angle per --data file (or one value for all)
-  --layer 7 7 ...     layer filter per --data file; omit for no filter
-  --no-tc-anchor      use median(x) anchor instead of TC-centroid (default: TC-centroid)
-  --train-all         merge train+val for final model (test set untouched)
+Datasets are specified either via --config (recommended) or --data/--theta/--layer flags.
+
+  --config configs/datasets.yaml --datasets h4_29deg_530V_100ns h8_15deg_530V_100ns
+      Load path, theta_deg, layer directly from the shared config file.
+
+  --data A B ... --theta 29 15 ... --layer 7 3 ...
+      Explicit paths; theta and layer per file (or one value for all).
+
+  --no-tc-anchor    use median(x) anchor instead of TC-centroid (default: TC-centroid)
+  --train-all       merge train+val for final model (test set untouched)
 
 Output files (outputs/):
   <prefix>_model.pt         model weights
@@ -13,14 +17,16 @@ Output files (outputs/):
   <prefix>_predictions.npz  y_pred, y_true, domain labels, training history
 
 Examples:
-  # single domain
+  # single domain from config
   python pipeline/04_train_gnn.py \\
-    --data /path/Roman_29deg.root --theta 29 --tc-anchor --out-prefix gnn_v5
+    --config configs/datasets.yaml --datasets h4_29deg_530V_100ns \\
+    --out-prefix gnn_v5_single
 
-  # multi-domain, two angles, layer filter for H4_GIF
+  # multi-domain from config
   python pipeline/04_train_gnn.py \\
-    --data /path/Roman_29deg.root /path/H4_GIF_530V_100ns.root \\
-    --theta 29 15 --layer 7 7 --tc-anchor --out-prefix gnn_multi_v5
+    --config configs/datasets.yaml \\
+    --datasets h4_29deg_530V_100ns h8_15deg_530V_100ns \\
+    --out-prefix gnn_multi_v5
 """
 from __future__ import annotations
 
@@ -32,6 +38,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+import yaml
 from torch.utils.data import DataLoader, ConcatDataset
 from tqdm import tqdm
 import sys
@@ -69,8 +76,12 @@ def _resolve_device(choice: str) -> torch.device:
 
 def main():
     p = argparse.ArgumentParser(description="Train strip self-attention GNN.")
-    p.add_argument("--data",         type=str, nargs="+", required=True,
-                   help="Path(s) to .root file(s). Multiple = multi-domain training.")
+    p.add_argument("--config",        type=str, default=None,
+                   help="Path to configs/datasets.yaml.")
+    p.add_argument("--datasets",      type=str, nargs="+", default=None,
+                   help="Dataset names from config to train on.")
+    p.add_argument("--data",          type=str, nargs="+", default=None,
+                   help="Explicit path(s) to .root file(s). Alternative to --config.")
     p.add_argument("--out-prefix",   type=str, default="gnn")
     p.add_argument("--epochs",       type=int,   default=30)
     p.add_argument("--batch-size",   type=int,   default=512)
@@ -108,26 +119,42 @@ def main():
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
+    # resolve dataset list from config or explicit --data flags
+    if args.config:
+        if not args.datasets:
+            p.error("--config requires --datasets")
+        with open(args.config) as f:
+            cfg_all = {c["name"]: c for c in yaml.safe_load(f)["datasets"]}
+        missing = [n for n in args.datasets if n not in cfg_all]
+        if missing:
+            p.error(f"Unknown dataset names: {missing}")
+        cfgs   = [cfg_all[n] for n in args.datasets]
+        paths  = [c["path"]              for c in cfgs]
+        thetas = [float(c["theta_deg"])  for c in cfgs]
+        layers = [c.get("layer", None)   for c in cfgs]
+    elif args.data:
+        paths  = args.data
+        thetas = args.theta
+        if len(thetas) == 1:
+            thetas = thetas * len(paths)
+        if len(thetas) != len(paths):
+            p.error(f"--theta must have 1 value or one per --data file ({len(paths)} files)")
+        layers = args.layer
+        if layers is None:
+            layers = [None] * len(paths)
+        elif len(layers) == 1:
+            layers = layers * len(paths)
+        if len(layers) != len(paths):
+            p.error(f"--layer must have 1 value or one per --data file ({len(paths)} files)")
+    else:
+        p.error("Specify --config --datasets or --data")
+
     detector_shift = load_detector_shift(OUT)
     if detector_shift != 0.0:
         print(f"[GNN] detector shift (phase 0): {detector_shift*1000:+.1f} um", flush=True)
 
-    thetas = args.theta
-    if len(thetas) == 1:
-        thetas = thetas * len(args.data)
-    if len(thetas) != len(args.data):
-        p.error(f"--theta must have 1 value or one per --data file ({len(args.data)} files)")
-
-    layers = args.layer
-    if layers is None:
-        layers = [None] * len(args.data)
-    elif len(layers) == 1:
-        layers = layers * len(args.data)
-    if len(layers) != len(args.data):
-        p.error(f"--layer must have 1 value or one per --data file ({len(args.data)} files)")
-
     all_ev, all_a, all_b, splits, all_theta = [], [], [], [], []
-    for path_str, theta, layer in zip(args.data, thetas, layers):
+    for path_str, theta, layer in zip(paths, thetas, layers):
         data_path = Path(path_str)
         print(f"[GNN] loading: {data_path.name}  theta={theta}deg  layer={layer}", flush=True)
         ev = load_events(data_path, layer=layer)
