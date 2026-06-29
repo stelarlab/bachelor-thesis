@@ -4,7 +4,7 @@ Flags:
   --data A B ...      one file = single-domain; multiple = multi-domain
   --theta 29 15 ...   one angle per --data file (or one value for all)
   --layer 7 7 ...     layer filter per --data file; omit for no filter
-  --tc-anchor         use TC-centroid anchor instead of median(x)
+  --no-tc-anchor      use median(x) anchor instead of TC-centroid (default: TC-centroid)
   --train-all         merge train+val for final model (test set untouched)
 
 Output files (outputs/):
@@ -89,8 +89,8 @@ def main():
                    help="Track incidence angle(s) [deg], one per --data file.")
     p.add_argument("--layer",        type=int,   nargs="+", default=None,
                    help="Layer filter(s), one per --data file. Omit for no filter.")
-    p.add_argument("--tc-anchor",    action="store_true",
-                   help="Use TC-centroid as anchor (better empirically; default: median).")
+    p.add_argument("--no-tc-anchor", action="store_true",
+                   help="Use median(x) as anchor instead of TC-centroid (Vogel Gl. 5.40).")
     p.add_argument("--no-cluster-select", action="store_true",
                    help="Disable within-road cluster isolation (default: enabled). "
                         "Cluster isolation picks the single connected strip cluster "
@@ -177,7 +177,8 @@ def main():
             all_ev[0], train_idx=splits[0]["train"],
             theta_deg=all_theta[0], tmax_ns=args.tmax)
     cluster_select = not args.no_cluster_select
-    anchor_name = "TC-centroid" if args.tc_anchor else "median(x)"
+    tc_anchor = not args.no_tc_anchor
+    anchor_name = "TC-centroid" if tc_anchor else "median(x)"
     print(f"[GNN] anchor: {anchor_name}  cluster_select={cluster_select}", flush=True)
 
     domain_test = np.concatenate([
@@ -191,7 +192,7 @@ def main():
             ds_norm.theta_deg = theta
             datasets.append(HitDataset(ev, sp[split_key], a, b, ds_norm,
                                        detector_shift_mm=detector_shift,
-                                       tc_anchor=args.tc_anchor,
+                                       tc_anchor=tc_anchor,
                                        cluster_select=cluster_select))
         return ConcatDataset(datasets)
 
