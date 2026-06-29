@@ -8,8 +8,17 @@ Strip features per hit (6):
   z_norm       — drift distance, normalized globally
   x_corr_rel   — muTPC-corrected position (x - z*tan(θ)) relative to anchor (Vogel §5.4.1)
 
-Global features per event (3):
-  slope_norm, nonprec_norm, log1p(n_strips)
+Global features per event (7):
+  slope_norm       — track slope (non-precision direction), normalized
+  nonprec_norm     — non-precision coordinate, normalized
+  log1p(n_strips)  — cluster size
+  sin(θ)           — sine of incidence angle
+  cos(θ)           — cosine of incidence angle
+  muTPC_slope_norm — slope of linear fit to (x_strip, z_strip), normalized (Vogel Gl. 5.37)
+  q_asym           — (q_back - q_front) / q_total, charge asymmetry (Vogel §5.4, Fig. 5.10)
+
+Note: sin/cos(θ) are included. They are constant within a single-angle run but become
+discriminative in multi-angle training. Each dataset gets its own theta_deg via norm.
 
 Label: (true_xpos - anchor) / 5.0
 """
@@ -28,6 +37,21 @@ from torch.utils.data import Dataset
 from data_loader import EventArrays, V_DRIFT, TAN_THETA, ROAD_MM, select_strips_in_road, select_cluster_near_track
 
 
+def _compute_muTPC_slopes(hits_x: ak.Array, hits_t: ak.Array) -> np.ndarray:
+    # Vogel Gl. 5.37: slope of linear fit to (x_strip, z_strip=t*vD) per event.
+    # Returns NaN-free array; events with <2 strips get slope=0.
+    slopes = []
+    for i in range(len(hits_x)):
+        x = np.asarray(hits_x[i], dtype=np.float32)
+        z = np.asarray(hits_t[i], dtype=np.float32) * V_DRIFT
+        if len(x) >= 2 and x.std() > 1e-6:
+            m = np.polyfit(x, z, 1)[0]
+        else:
+            m = 0.0
+        slopes.append(float(m))
+    return np.array(slopes, dtype=np.float32)
+
+
 @dataclass
 class Normalization:
     # per-strip stats
@@ -38,6 +62,9 @@ class Normalization:
     # per-event track stats
     slope_mean: float; slope_std: float
     nonprec_mean: float; nonprec_std: float
+    # muTPC slope stats (Vogel Gl. 5.37)
+    muTPC_slope_mean: float = 0.0
+    muTPC_slope_std: float = 1.0
     # metadata
     theta_deg: float = 29.0
     tmax_ns: float = 100.0
@@ -56,6 +83,8 @@ class Normalization:
         ft = np.asarray(ak.flatten(ht))
         fz = ft * V_DRIFT
 
+        ms = _compute_muTPC_slopes(hx, ht)
+
         return cls(
             x_mean=float(fx.mean()),  x_std=float(fx.std()  + 1e-9),
             q_mean=float(fq.mean()),  q_std=float(fq.std()  + 1e-9),
@@ -63,12 +92,13 @@ class Normalization:
             z_mean=float(fz.mean()),  z_std=float(fz.std()  + 1e-9),
             slope_mean=float(sl.mean()),   slope_std=float(sl.std()   + 1e-9),
             nonprec_mean=float(np_.mean()), nonprec_std=float(np_.std() + 1e-9),
+            muTPC_slope_mean=float(ms.mean()), muTPC_slope_std=float(ms.std() + 1e-9),
             theta_deg=float(theta_deg), tmax_ns=float(tmax_ns),
         )
 
     @classmethod
     def from_datasets(cls, datasets: list[tuple], theta_deg: float = 29.0) -> "Normalization":
-        all_x, all_q, all_t, all_sl, all_np = [], [], [], [], []
+        all_x, all_q, all_t, all_sl, all_np, all_ms = [], [], [], [], [], []
         for ev, tr in datasets:
             hx = ev.hits_x[tr]; hq = ev.hits_q[tr]; ht = ev.hits_t[tr]
             all_x.append(np.asarray(ak.flatten(hx)))
@@ -76,10 +106,12 @@ class Normalization:
             all_t.append(np.asarray(ak.flatten(ht)))
             all_sl.append(ev.track_slope[tr])
             all_np.append(ev.non_prec[tr])
+            all_ms.append(_compute_muTPC_slopes(hx, ht))
 
         fx=np.concatenate(all_x); fq=np.concatenate(all_q)
         ft=np.concatenate(all_t); fz=ft*V_DRIFT
         fs=np.concatenate(all_sl); fn=np.concatenate(all_np)
+        fm=np.concatenate(all_ms)
 
         return cls(
             x_mean=float(fx.mean()), x_std=float(fx.std()+1e-9),
@@ -88,6 +120,7 @@ class Normalization:
             z_mean=float(fz.mean()), z_std=float(fz.std()+1e-9),
             slope_mean=float(fs.mean()), slope_std=float(fs.std()+1e-9),
             nonprec_mean=float(fn.mean()), nonprec_std=float(fn.std()+1e-9),
+            muTPC_slope_mean=float(fm.mean()), muTPC_slope_std=float(fm.std()+1e-9),
             theta_deg=float(theta_deg), tmax_ns=-1.0,
         )
 
@@ -96,7 +129,11 @@ class Normalization:
 
     @classmethod
     def load(cls, path: Path | str) -> "Normalization":
-        return cls(**json.loads(Path(path).read_text()))
+        d = json.loads(Path(path).read_text())
+        # backwards-compat: old norm files lack muTPC_slope stats
+        d.setdefault("muTPC_slope_mean", 0.0)
+        d.setdefault("muTPC_slope_std",  1.0)
+        return cls(**d)
 
 
 class HitDataset(Dataset):
@@ -163,10 +200,28 @@ class HitDataset(Dataset):
         strip = np.stack([x_norm, q_norm, t_norm, x_rel, z_norm, x_corr_rel],
                          axis=1).astype(np.float32)
 
+        if len(x) >= 2 and x.std() > 1e-6:
+            muTPC_slope = float(np.polyfit(x, z, 1)[0])
+        else:
+            muTPC_slope = 0.0
+
+        if len(q) >= 2:
+            order_x = np.argsort(x)
+            q_sorted = q[order_x]
+            half = len(q_sorted) // 2
+            q_asym = float((q_sorted[half:].sum() - q_sorted[:half].sum()) / (q_sum + 1e-9))
+        else:
+            q_asym = 0.0
+
+        theta_rad = math.radians(self.norm.theta_deg)
         glob = np.array([
-            (self.slope[i] - self.norm.slope_mean)  / self.norm.slope_std,
+            (self.slope[i] - self.norm.slope_mean)   / self.norm.slope_std,
             (self.nonp[i]  - self.norm.nonprec_mean) / self.norm.nonprec_std,
             np.log1p(len(x)),
+            math.sin(theta_rad),
+            math.cos(theta_rad),
+            (muTPC_slope - self.norm.muTPC_slope_mean) / self.norm.muTPC_slope_std,
+            q_asym,
         ], dtype=np.float32)
 
         label_local = (self.label_xpos[i] - anchor) / 5.0

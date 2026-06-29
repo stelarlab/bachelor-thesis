@@ -5,8 +5,7 @@ datasets:
     theta_deg: 29.0
     voltage_V: 530
     tmax_ns:   100.0
-    layer:     7
-    notes:     "primary training set"
+    notes:     "primary training set; pre-filtered to single layer, no layer= needed"
 
   # H4 GIF — layer 7 corresponds to layer 3 in H8 (same physical detector, different numbering)
   - name: h4_gif_29deg_530V_100ns
