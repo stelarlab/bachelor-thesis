@@ -78,8 +78,8 @@ def main():
     p.add_argument("--device",       choices=["auto","cuda","mps","cpu"], default="auto")
     p.add_argument("--tmax",         type=float, default=100.0,
                    help="Shaping time [ns] of the dataset. Single-domain only.")
-    p.add_argument("--theta",        type=float, default=29.0,
-                   help="Track incidence angle [deg].")
+    p.add_argument("--theta",        type=float, nargs="+", default=[29.0],
+                   help="Track incidence angle(s) [deg], one per --data file.")
     p.add_argument("--tc-anchor",    action="store_true",
                    help="Use TC-centroid as anchor (better empirically; default: median).")
     p.add_argument("--no-cluster-select", action="store_true",
@@ -103,10 +103,16 @@ def main():
     if detector_shift != 0.0:
         print(f"[GNN] detector shift (phase 0): {detector_shift*1000:+.1f} um", flush=True)
 
-    all_ev, all_a, all_b, splits = [], [], [], []
-    for path_str in args.data:
+    thetas = args.theta
+    if len(thetas) == 1:
+        thetas = thetas * len(args.data)
+    if len(thetas) != len(args.data):
+        p.error(f"--theta must have 1 value or one per --data file ({len(args.data)} files)")
+
+    all_ev, all_a, all_b, splits, all_theta = [], [], [], [], []
+    for path_str, theta in zip(args.data, thetas):
         data_path = Path(path_str)
-        print(f"[GNN] loading: {data_path.name}", flush=True)
+        print(f"[GNN] loading: {data_path.name}  theta={theta}deg", flush=True)
         ev = load_events(data_path)
         a, b = learn_frame_transform(ev)
         print(f"[GNN]   frame transform: a={a:.6f}  b={b:+.4f}", flush=True)
@@ -141,33 +147,37 @@ def main():
         tr_idx = tr_idx[ev.n_hits[tr_idx] <= MAX_NHITS_TRAIN]
         va_idx = va_idx[ev.n_hits[va_idx] <= MAX_NHITS_TRAIN]
         splits.append({"train": tr_idx, "val": va_idx, "test": te_idx})
+        all_theta.append(theta)
         print(f"[GNN]   train={len(tr_idx)}  val={len(va_idx)}  test={len(te_idx)}", flush=True)
 
     if len(all_ev) > 1:
         norm = Normalization.from_datasets(
             [(ev, sp["train"]) for ev, sp in zip(all_ev, splits)],
-            theta_deg=args.theta)
-        print(f"[GNN] multi-domain normalization (tmax=-1)", flush=True)
+            theta_deg=all_theta[0])
+        print(f"[GNN] multi-domain normalization  thetas={all_theta}", flush=True)
     else:
         norm = Normalization.from_arrays(
             all_ev[0], train_idx=splits[0]["train"],
-            theta_deg=args.theta, tmax_ns=args.tmax)
+            theta_deg=all_theta[0], tmax_ns=args.tmax)
     cluster_select = not args.no_cluster_select
     anchor_name = "TC-centroid" if args.tc_anchor else "median(x)"
-    print(f"[GNN] anchor: {anchor_name}  theta={args.theta}deg  "
-          f"cluster_select={cluster_select}", flush=True)
+    print(f"[GNN] anchor: {anchor_name}  cluster_select={cluster_select}", flush=True)
 
     domain_test = np.concatenate([
         np.full(len(sp["test"]), d, dtype=np.int32) for d, sp in enumerate(splits)
     ])
 
     def make_ds(split_key):
-        return ConcatDataset([
-            HitDataset(ev, sp[split_key], a, b, norm,
-                       detector_shift_mm=detector_shift, tc_anchor=args.tc_anchor,
-                       cluster_select=cluster_select)
-            for ev, sp, a, b in zip(all_ev, splits, all_a, all_b)
-        ])
+        import copy
+        datasets = []
+        for ev, sp, a, b, theta in zip(all_ev, splits, all_a, all_b, all_theta):
+            ds_norm = copy.copy(norm)
+            ds_norm.theta_deg = theta
+            datasets.append(HitDataset(ev, sp[split_key], a, b, ds_norm,
+                                       detector_shift_mm=detector_shift,
+                                       tc_anchor=args.tc_anchor,
+                                       cluster_select=cluster_select))
+        return ConcatDataset(datasets)
 
     dl_tr = DataLoader(make_ds("train"), batch_size=args.batch_size,     shuffle=True,
                        collate_fn=collate_padded, num_workers=args.num_workers, pin_memory=True)
@@ -178,7 +188,7 @@ def main():
 
     device = _resolve_device(args.device)
     print(f"[GNN] device = {device}", flush=True)
-    model = StripModel(n_strip_feats=6, n_global_feats=5, d_model=args.d_model, n_heads=args.n_heads,
+    model = StripModel(n_strip_feats=6, n_global_feats=7, d_model=args.d_model, n_heads=args.n_heads,
                        n_layers=args.n_layers, dropout=args.dropout).to(device)
     print(f"[GNN] parameters: {sum(p.numel() for p in model.parameters()):,}", flush=True)
 

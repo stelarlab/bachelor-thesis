@@ -149,16 +149,20 @@ Weitere physikalisch relevante Größen aus Vogel:
 
 ### Neue Features — Entscheidung und Begründung
 
-#### 1. θ als Global-Feature — zurückgestellt
+#### 1. θ als Global-Feature (sin/cos Encoding)
 
-**Ursprüngliche Planung:** sin(θ) und cos(θ) als Global-Features.
+**Warum sin/cos statt θ direkt:** tan(θ) = sin(θ)/cos(θ) ist direkt ableitbar, beide
+Komponenten sind in [-1,1] normiert ohne zusätzliche Skalierung, und das Encoding ist
+rotationssymmetrisch — Standard in der Physik-ML-Literatur für Winkelgrößen.
 
-**Entscheidung gegen Einbau (jetzt):** Beim Training auf nur einem Winkel (29°) sind
-sin(29°) und cos(29°) für jedes Event identisch — konstante Features ohne Diskriminationswert.
-Die entsprechenden Gewichte konvergieren gegen 0 oder zufällige Werte. Beim ZeroShot
-bekommt das Modell dann sin(15°) — ein Wert den es nie gesehen hat, out-of-distribution.
+**Wann sinnvoll:** Nur beim Multi-Winkel-Training. Beim Training auf einem einzelnen Winkel
+sind sin(θ) und cos(θ) für jedes Event identisch — konstante Features ohne Diskriminationswert.
+Die Gewichte konvergieren gegen 0.
 
-Sin/cos θ macht nur Sinn beim Multi-Winkel-Training. Wird dort explizit eingebaut.
+**Entscheidung:** sin/cos θ einbauen, aber erst mit Multi-Winkel-Training aktivieren.
+`04_train_gnn.py` akzeptiert jetzt `--theta` als Liste (ein Wert pro `--data` File) —
+jedes Dataset bekommt seine eigene `norm.theta_deg`-Kopie → korrekte `x_corr_rel` und
+korrekte sin/cos pro Dataset.
 
 #### 2. μTPC-Slope als Global-Feature
 **Physik:** Vogel Gl. 5.37 — der Slope des linearen Fits über (x_strip, z_strip) kodiert
@@ -201,7 +205,7 @@ der Attention-Mechanismus sie aggregieren muss. Es reduziert die Lernlast.
 | muTPC_slope_norm | Slope aus (x,z)-Fit, normalisiert | gemessener Winkel aus Hits (Vogel Gl. 5.37) |
 | q_asym | (q_back - q_front) / q_total | Ladungsasymmetrie (Vogel §5.4) |
 
-n_global_feats: 3 → 5. sin/cos θ folgt beim Multi-Winkel-Training.
+n_global_feats: 3 → 7. --theta akzeptiert jetzt eine Liste, ein Wert pro Dataset.
 
 ### Normalization-Erweiterung
 Neue Normierungsstatistiken nötig: `muTPC_slope_mean`, `muTPC_slope_std`.
