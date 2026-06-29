@@ -149,19 +149,16 @@ Weitere physikalisch relevante Größen aus Vogel:
 
 ### Neue Features — Entscheidung und Begründung
 
-#### 1. θ als Global-Feature (sin/cos Encoding)
-**Warum:** Das Modell bekommt den Winkel nie explizit gesagt. Alle winkelabhängigen
-Zusammenhänge müssen implizit aus den Cluster-Features erschlossen werden.
+#### 1. θ als Global-Feature — zurückgestellt
 
-**Lars (Einwand):** "Ist der nicht schon drin über x_corr_rel?"
-**Antwort:** Nein. x_corr_rel nutzt tan(θ) zur Feature-Berechnung, aber der Wert von θ
-selbst ist dem Modell nicht bekannt. Bei Multi-Winkel-Training sieht das Modell
-x_corr_rel-Werte von verschiedenen Winkeln — ohne θ als Feature kann es sie nicht
-unterscheiden.
+**Ursprüngliche Planung:** sin(θ) und cos(θ) als Global-Features.
 
-**Encoding:** sin(θ) und cos(θ) statt rohem θ_deg — periodisch, skalierungsfrei,
-und tan(θ) = sin(θ)/cos(θ) ist direkt ableitbar. Das entspricht dem Standard in der
-Physik-ML-Literatur für Winkelgrößen.
+**Entscheidung gegen Einbau (jetzt):** Beim Training auf nur einem Winkel (29°) sind
+sin(29°) und cos(29°) für jedes Event identisch — konstante Features ohne Diskriminationswert.
+Die entsprechenden Gewichte konvergieren gegen 0 oder zufällige Werte. Beim ZeroShot
+bekommt das Modell dann sin(15°) — ein Wert den es nie gesehen hat, out-of-distribution.
+
+Sin/cos θ macht nur Sinn beim Multi-Winkel-Training. Wird dort explizit eingebaut.
 
 #### 2. μTPC-Slope als Global-Feature
 **Physik:** Vogel Gl. 5.37 — der Slope des linearen Fits über (x_strip, z_strip) kodiert
@@ -195,18 +192,16 @@ der Attention-Mechanismus sie aggregieren muss. Es reduziert die Lernlast.
 **Strip-Features (6, unverändert):**
 `x_norm`, `q_norm`, `t_norm`, `x_rel`, `z_norm`, `x_corr_rel`
 
-**Global-Features (6, erweitert von 3):**
+**Global-Features (5, erweitert von 3):**
 | Feature | Berechnung | Physik |
 |---|---|---|
 | slope_norm | track_slope normalisiert | non-precision direction |
 | nonprec_norm | non_prec normalisiert | non-precision coordinate |
 | log1p(n_strips) | log(1 + N) | Clustergröße |
-| sin(θ) | sin(theta_deg * π/180) | Winkel-Encoding |
-| cos(θ) | cos(theta_deg * π/180) | Winkel-Encoding |
-| muTPC_slope_norm | Slope aus (x,z)-Fit, normalisiert | gemessener Winkel aus Hits |
+| muTPC_slope_norm | Slope aus (x,z)-Fit, normalisiert | gemessener Winkel aus Hits (Vogel Gl. 5.37) |
 | q_asym | (q_back - q_front) / q_total | Ladungsasymmetrie (Vogel §5.4) |
 
-n_global_feats: 3 → 7
+n_global_feats: 3 → 5. sin/cos θ folgt beim Multi-Winkel-Training.
 
 ### Normalization-Erweiterung
 Neue Normierungsstatistiken nötig: `muTPC_slope_mean`, `muTPC_slope_std`.
