@@ -8,15 +8,17 @@ Strip features per hit (6):
   z_norm       — drift distance, normalized globally
   x_corr_rel   — muTPC-corrected position (x - z*tan(θ)) relative to anchor (Vogel §5.4.1)
 
-Global features per event (5):
+Global features per event (7):
   slope_norm       — track slope (non-precision direction), normalized
   nonprec_norm     — non-precision coordinate, normalized
   log1p(n_strips)  — cluster size
+  sin(θ)           — sine of incidence angle
+  cos(θ)           — cosine of incidence angle
   muTPC_slope_norm — slope of linear fit to (x_strip, z_strip), normalized (Vogel Gl. 5.37)
   q_asym           — (q_back - q_front) / q_total, charge asymmetry (Vogel §5.4, Fig. 5.10)
 
-Note: sin/cos(θ) are intentionally excluded here. They are constant within a single-angle
-training run and carry no discriminative information until multi-angle training is set up.
+Note: sin/cos(θ) are included. They are constant within a single-angle run but become
+discriminative in multi-angle training. Each dataset gets its own theta_deg via norm.
 
 Label: (true_xpos - anchor) / 5.0
 """
@@ -211,10 +213,13 @@ class HitDataset(Dataset):
         else:
             q_asym = 0.0
 
+        theta_rad = math.radians(self.norm.theta_deg)
         glob = np.array([
             (self.slope[i] - self.norm.slope_mean)   / self.norm.slope_std,
             (self.nonp[i]  - self.norm.nonprec_mean) / self.norm.nonprec_std,
             np.log1p(len(x)),
+            math.sin(theta_rad),
+            math.cos(theta_rad),
             (muTPC_slope - self.norm.muTPC_slope_mean) / self.norm.muTPC_slope_std,
             q_asym,
         ], dtype=np.float32)
