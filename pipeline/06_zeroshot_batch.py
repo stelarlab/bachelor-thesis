@@ -165,8 +165,8 @@ def main():
     p.add_argument("--datasets",   nargs="+",     help="Dataset names from config")
     p.add_argument("--all",        action="store_true", help="Evaluate all datasets in config")
     p.add_argument("--out-prefix",  default="zeroshot")
-    p.add_argument("--tc-anchor",   action="store_true",
-                   help="Use TC-centroid anchor (must match training configuration).")
+    p.add_argument("--no-tc-anchor", action="store_true",
+                   help="Use median(x) anchor instead of TC-centroid (must match training).")
     args = p.parse_args()
 
     with open(args.config) as f:
@@ -206,7 +206,7 @@ def main():
         try:
             r = eval_dataset(cfg, model, norm, n_strip_feats,
                              device, args.out_prefix, detector_shift,
-                             tc_anchor=args.tc_anchor)
+                             tc_anchor=not args.no_tc_anchor)
             results.append(r)
         except Exception as e:
             print(f"[Batch] ERROR on {cfg['name']}: {e}", flush=True)
