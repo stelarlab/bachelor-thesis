@@ -62,7 +62,6 @@ def _plot_residuals_vs_position(res, y_true, name, out_prefix, theta_deg):
     ax.hexbin(y_true[qc], res[qc] * 1000, gridsize=80, cmap="Blues",
               mincnt=1, vmax=None)
     ax.axhline(0, color="black", lw=0.8, ls="--")
-    # rolling median to show bias vs position
     order   = np.argsort(y_true[qc])
     x_s     = y_true[qc][order]
     r_s     = res[qc][order] * 1000
@@ -81,7 +80,7 @@ def _plot_residuals_vs_position(res, y_true, name, out_prefix, theta_deg):
     print(f"[Batch]   plot: {p.name}", flush=True)
 
 
-def eval_dataset(cfg, model, norm, n_strip_feats, device, out_prefix, detector_shift):
+def eval_dataset(cfg, model, norm, n_strip_feats, device, out_prefix, detector_shift, tc_anchor=True):
     name      = cfg["name"]
     path      = Path(cfg["path"])
     theta_deg = float(cfg.get("theta_deg", 29.0))
@@ -102,7 +101,7 @@ def eval_dataset(cfg, model, norm, n_strip_feats, device, out_prefix, detector_s
 
     ds = HitDataset(ev, all_idx, a, b, eval_norm,
                     detector_shift_mm=detector_shift,
-                    tc_anchor=True, cluster_select=True)
+                    tc_anchor=tc_anchor, cluster_select=True)
     dl = DataLoader(ds, batch_size=512, shuffle=False,
                     collate_fn=collate_padded, num_workers=0)
 
@@ -165,7 +164,9 @@ def main():
     p.add_argument("--config",     required=True, help="Path to configs/datasets.yaml")
     p.add_argument("--datasets",   nargs="+",     help="Dataset names from config")
     p.add_argument("--all",        action="store_true", help="Evaluate all datasets in config")
-    p.add_argument("--out-prefix", default="zeroshot")
+    p.add_argument("--out-prefix",  default="zeroshot")
+    p.add_argument("--tc-anchor",   action="store_true",
+                   help="Use TC-centroid anchor (must match training configuration).")
     args = p.parse_args()
 
     with open(args.config) as f:
@@ -204,7 +205,8 @@ def main():
     for cfg in selected:
         try:
             r = eval_dataset(cfg, model, norm, n_strip_feats,
-                             device, args.out_prefix, detector_shift)
+                             device, args.out_prefix, detector_shift,
+                             tc_anchor=args.tc_anchor)
             results.append(r)
         except Exception as e:
             print(f"[Batch] ERROR on {cfg['name']}: {e}", flush=True)

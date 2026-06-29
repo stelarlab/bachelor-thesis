@@ -1,24 +1,31 @@
 """Train the strip self-attention GNN for position reconstruction.
 
-This script covers all GNN variants through CLI flags:
-  --tc-anchor     use TC-centroid anchor instead of median(x)
-  --data A B ...  one file = single-domain; multiple files = multi-domain training
-  --train-all     merge train+val splits for the final model (test set untouched)
+Flags:
+  --data A B ...      one file = single-domain; multiple = multi-domain
+  --theta 29 15 ...   one angle per --data file (or one value for all)
+  --layer 7 7 ...     layer filter per --data file; omit for no filter
+  --tc-anchor         use TC-centroid anchor instead of median(x)
+  --train-all         merge train+val for final model (test set untouched)
 
-Output files (all under outputs/):
-  <prefix>_model.pt       model weights
-  <prefix>_norm.json      normalization statistics
+Output files (outputs/):
+  <prefix>_model.pt         model weights
+  <prefix>_norm.json        normalization statistics
   <prefix>_predictions.npz  y_pred, y_true, domain labels, training history
 
-Example — single domain, TC-anchor:
-  python train_gnn.py --data Data_100ns.root --tc-anchor --out-prefix gnn_tc
+Examples:
+  # single domain
+  python pipeline/04_train_gnn.py \\
+    --data /path/Roman_29deg.root --theta 29 --tc-anchor --out-prefix gnn_v5
 
-Example — multi-domain:
-  python train_gnn.py --data Data_100ns.root Data_200ns.root --out-prefix gnn_multidomain
+  # multi-domain, two angles, layer filter for H4_GIF
+  python pipeline/04_train_gnn.py \\
+    --data /path/Roman_29deg.root /path/H4_GIF_530V_100ns.root \\
+    --theta 29 15 --layer 7 7 --tc-anchor --out-prefix gnn_multi_v5
 """
 from __future__ import annotations
 
 import argparse
+import copy
 import time
 from pathlib import Path
 
@@ -80,6 +87,8 @@ def main():
                    help="Shaping time [ns] of the dataset. Single-domain only.")
     p.add_argument("--theta",        type=float, nargs="+", default=[29.0],
                    help="Track incidence angle(s) [deg], one per --data file.")
+    p.add_argument("--layer",        type=int,   nargs="+", default=None,
+                   help="Layer filter(s), one per --data file. Omit for no filter.")
     p.add_argument("--tc-anchor",    action="store_true",
                    help="Use TC-centroid as anchor (better empirically; default: median).")
     p.add_argument("--no-cluster-select", action="store_true",
@@ -109,11 +118,19 @@ def main():
     if len(thetas) != len(args.data):
         p.error(f"--theta must have 1 value or one per --data file ({len(args.data)} files)")
 
+    layers = args.layer
+    if layers is None:
+        layers = [None] * len(args.data)
+    elif len(layers) == 1:
+        layers = layers * len(args.data)
+    if len(layers) != len(args.data):
+        p.error(f"--layer must have 1 value or one per --data file ({len(args.data)} files)")
+
     all_ev, all_a, all_b, splits, all_theta = [], [], [], [], []
-    for path_str, theta in zip(args.data, thetas):
+    for path_str, theta, layer in zip(args.data, thetas, layers):
         data_path = Path(path_str)
-        print(f"[GNN] loading: {data_path.name}  theta={theta}deg", flush=True)
-        ev = load_events(data_path)
+        print(f"[GNN] loading: {data_path.name}  theta={theta}deg  layer={layer}", flush=True)
+        ev = load_events(data_path, layer=layer)
         a, b = learn_frame_transform(ev)
         print(f"[GNN]   frame transform: a={a:.6f}  b={b:+.4f}", flush=True)
         all_ev.append(ev); all_a.append(a); all_b.append(b)
@@ -168,7 +185,6 @@ def main():
     ])
 
     def make_ds(split_key):
-        import copy
         datasets = []
         for ev, sp, a, b, theta in zip(all_ev, splits, all_a, all_b, all_theta):
             ds_norm = copy.copy(norm)
