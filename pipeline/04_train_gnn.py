@@ -1,30 +1,44 @@
 """Train the strip self-attention GNN for position reconstruction.
 
-This script covers all GNN variants through CLI flags:
-  --tc-anchor     use TC-centroid anchor instead of median(x)
-  --data A B ...  one file = single-domain; multiple files = multi-domain training
-  --train-all     merge train+val splits for the final model (test set untouched)
+Datasets are specified either via --config (recommended) or --data/--theta/--layer flags.
 
-Output files (all under outputs/):
-  <prefix>_model.pt       model weights
-  <prefix>_norm.json      normalization statistics
+  --config configs/datasets.yaml --datasets h4_29deg_530V_100ns h8_15deg_530V_100ns
+      Load path, theta_deg, layer directly from the shared config file.
+
+  --data A B ... --theta 29 15 ... --layer 7 3 ...
+      Explicit paths; theta and layer per file (or one value for all).
+
+  --no-tc-anchor    use median(x) anchor instead of TC-centroid (default: TC-centroid)
+  --train-all       merge train+val for final model (test set untouched)
+
+Output files (outputs/):
+  <prefix>_model.pt         model weights
+  <prefix>_norm.json        normalization statistics
   <prefix>_predictions.npz  y_pred, y_true, domain labels, training history
 
-Example — single domain, TC-anchor:
-  python train_gnn.py --data Data_100ns.root --tc-anchor --out-prefix gnn_tc
+Examples:
+  # single domain from config
+  python pipeline/04_train_gnn.py \\
+    --config configs/datasets.yaml --datasets h4_29deg_530V_100ns \\
+    --out-prefix gnn_v5_single
 
-Example — multi-domain:
-  python train_gnn.py --data Data_100ns.root Data_200ns.root --out-prefix gnn_multidomain
+  # multi-domain from config
+  python pipeline/04_train_gnn.py \\
+    --config configs/datasets.yaml \\
+    --datasets h4_29deg_530V_100ns h8_15deg_530V_100ns \\
+    --out-prefix gnn_multi_v5
 """
 from __future__ import annotations
 
 import argparse
+import copy
 import time
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn as nn
+import yaml
 from torch.utils.data import DataLoader, ConcatDataset
 from tqdm import tqdm
 import sys
@@ -62,8 +76,12 @@ def _resolve_device(choice: str) -> torch.device:
 
 def main():
     p = argparse.ArgumentParser(description="Train strip self-attention GNN.")
-    p.add_argument("--data",         type=str, nargs="+", required=True,
-                   help="Path(s) to .root file(s). Multiple = multi-domain training.")
+    p.add_argument("--config",        type=str, default=None,
+                   help="Path to configs/datasets.yaml.")
+    p.add_argument("--datasets",      type=str, nargs="+", default=None,
+                   help="Dataset names from config to train on.")
+    p.add_argument("--data",          type=str, nargs="+", default=None,
+                   help="Explicit path(s) to .root file(s). Alternative to --config.")
     p.add_argument("--out-prefix",   type=str, default="gnn")
     p.add_argument("--epochs",       type=int,   default=30)
     p.add_argument("--batch-size",   type=int,   default=512)
@@ -78,10 +96,12 @@ def main():
     p.add_argument("--device",       choices=["auto","cuda","mps","cpu"], default="auto")
     p.add_argument("--tmax",         type=float, default=100.0,
                    help="Shaping time [ns] of the dataset. Single-domain only.")
-    p.add_argument("--theta",        type=float, default=29.0,
-                   help="Track incidence angle [deg].")
-    p.add_argument("--tc-anchor",    action="store_true",
-                   help="Use TC-centroid as anchor (better empirically; default: median).")
+    p.add_argument("--theta",        type=float, nargs="+", default=[29.0],
+                   help="Track incidence angle(s) [deg], one per --data file.")
+    p.add_argument("--layer",        type=int,   nargs="+", default=None,
+                   help="Layer filter(s), one per --data file. Omit for no filter.")
+    p.add_argument("--no-tc-anchor", action="store_true",
+                   help="Use median(x) as anchor instead of TC-centroid (Vogel Gl. 5.40).")
     p.add_argument("--no-cluster-select", action="store_true",
                    help="Disable within-road cluster isolation (default: enabled). "
                         "Cluster isolation picks the single connected strip cluster "
@@ -99,15 +119,45 @@ def main():
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
+    # resolve dataset list from config or explicit --data flags
+    if args.config:
+        if not args.datasets:
+            p.error("--config requires --datasets")
+        with open(args.config) as f:
+            cfg_all = {c["name"]: c for c in yaml.safe_load(f)["datasets"]}
+        missing = [n for n in args.datasets if n not in cfg_all]
+        if missing:
+            p.error(f"Unknown dataset names: {missing}")
+        cfgs   = [cfg_all[n] for n in args.datasets]
+        paths  = [c["path"]              for c in cfgs]
+        thetas = [float(c["theta_deg"])  for c in cfgs]
+        layers = [c.get("layer", None)   for c in cfgs]
+    elif args.data:
+        paths  = args.data
+        thetas = args.theta
+        if len(thetas) == 1:
+            thetas = thetas * len(paths)
+        if len(thetas) != len(paths):
+            p.error(f"--theta must have 1 value or one per --data file ({len(paths)} files)")
+        layers = args.layer
+        if layers is None:
+            layers = [None] * len(paths)
+        elif len(layers) == 1:
+            layers = layers * len(paths)
+        if len(layers) != len(paths):
+            p.error(f"--layer must have 1 value or one per --data file ({len(paths)} files)")
+    else:
+        p.error("Specify --config --datasets or --data")
+
     detector_shift = load_detector_shift(OUT)
     if detector_shift != 0.0:
         print(f"[GNN] detector shift (phase 0): {detector_shift*1000:+.1f} um", flush=True)
 
-    all_ev, all_a, all_b, splits = [], [], [], []
-    for path_str in args.data:
+    all_ev, all_a, all_b, splits, all_theta = [], [], [], [], []
+    for path_str, theta, layer in zip(paths, thetas, layers):
         data_path = Path(path_str)
-        print(f"[GNN] loading: {data_path.name}", flush=True)
-        ev = load_events(data_path)
+        print(f"[GNN] loading: {data_path.name}  theta={theta}deg  layer={layer}", flush=True)
+        ev = load_events(data_path, layer=layer)
         a, b = learn_frame_transform(ev)
         print(f"[GNN]   frame transform: a={a:.6f}  b={b:+.4f}", flush=True)
         all_ev.append(ev); all_a.append(a); all_b.append(b)
@@ -141,33 +191,37 @@ def main():
         tr_idx = tr_idx[ev.n_hits[tr_idx] <= MAX_NHITS_TRAIN]
         va_idx = va_idx[ev.n_hits[va_idx] <= MAX_NHITS_TRAIN]
         splits.append({"train": tr_idx, "val": va_idx, "test": te_idx})
+        all_theta.append(theta)
         print(f"[GNN]   train={len(tr_idx)}  val={len(va_idx)}  test={len(te_idx)}", flush=True)
 
     if len(all_ev) > 1:
         norm = Normalization.from_datasets(
             [(ev, sp["train"]) for ev, sp in zip(all_ev, splits)],
-            theta_deg=args.theta)
-        print(f"[GNN] multi-domain normalization (tmax=-1)", flush=True)
+            theta_deg=all_theta[0])
+        print(f"[GNN] multi-domain normalization  thetas={all_theta}", flush=True)
     else:
         norm = Normalization.from_arrays(
             all_ev[0], train_idx=splits[0]["train"],
-            theta_deg=args.theta, tmax_ns=args.tmax)
+            theta_deg=all_theta[0], tmax_ns=args.tmax)
     cluster_select = not args.no_cluster_select
-    anchor_name = "TC-centroid" if args.tc_anchor else "median(x)"
-    print(f"[GNN] anchor: {anchor_name}  theta={args.theta}deg  "
-          f"cluster_select={cluster_select}", flush=True)
+    tc_anchor = not args.no_tc_anchor
+    anchor_name = "TC-centroid" if tc_anchor else "median(x)"
+    print(f"[GNN] anchor: {anchor_name}  cluster_select={cluster_select}", flush=True)
 
     domain_test = np.concatenate([
         np.full(len(sp["test"]), d, dtype=np.int32) for d, sp in enumerate(splits)
     ])
 
     def make_ds(split_key):
-        return ConcatDataset([
-            HitDataset(ev, sp[split_key], a, b, norm,
-                       detector_shift_mm=detector_shift, tc_anchor=args.tc_anchor,
-                       cluster_select=cluster_select)
-            for ev, sp, a, b in zip(all_ev, splits, all_a, all_b)
-        ])
+        datasets = []
+        for ev, sp, a, b, theta in zip(all_ev, splits, all_a, all_b, all_theta):
+            ds_norm = copy.copy(norm)
+            ds_norm.theta_deg = theta
+            datasets.append(HitDataset(ev, sp[split_key], a, b, ds_norm,
+                                       detector_shift_mm=detector_shift,
+                                       tc_anchor=tc_anchor,
+                                       cluster_select=cluster_select))
+        return ConcatDataset(datasets)
 
     dl_tr = DataLoader(make_ds("train"), batch_size=args.batch_size,     shuffle=True,
                        collate_fn=collate_padded, num_workers=args.num_workers, pin_memory=True)
@@ -178,7 +232,7 @@ def main():
 
     device = _resolve_device(args.device)
     print(f"[GNN] device = {device}", flush=True)
-    model = StripModel(n_strip_feats=6, n_global_feats=3, d_model=args.d_model, n_heads=args.n_heads,
+    model = StripModel(n_strip_feats=6, n_global_feats=7, d_model=args.d_model, n_heads=args.n_heads,
                        n_layers=args.n_layers, dropout=args.dropout).to(device)
     print(f"[GNN] parameters: {sum(p.numel() for p in model.parameters()):,}", flush=True)
 
