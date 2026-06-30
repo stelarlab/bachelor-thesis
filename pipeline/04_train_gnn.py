@@ -102,6 +102,9 @@ def main():
                    help="Layer filter(s), one per --data file. Omit for no filter.")
     p.add_argument("--no-tc-anchor", action="store_true",
                    help="Use median(x) as anchor instead of TC-centroid (Vogel Gl. 5.40).")
+    p.add_argument("--per-dataset-norm", action="store_true",
+                   help="Compute separate normalization per dataset instead of shared. "
+                        "Removes cross-angle normalization bias in multi-domain training.")
     p.add_argument("--no-cluster-select", action="store_true",
                    help="Disable within-road cluster isolation (default: enabled). "
                         "Cluster isolation picks the single connected strip cluster "
@@ -194,15 +197,26 @@ def main():
         all_theta.append(theta)
         print(f"[GNN]   train={len(tr_idx)}  val={len(va_idx)}  test={len(te_idx)}", flush=True)
 
-    if len(all_ev) > 1:
+    per_dataset_norm = args.per_dataset_norm and len(all_ev) > 1
+    if per_dataset_norm:
+        norms = Normalization.from_datasets(
+            [(ev, sp["train"]) for ev, sp in zip(all_ev, splits)],
+            theta_degs=all_theta, per_dataset=True)
+        norm = norms[0]  # representative for saving shared metadata
+        print(f"[GNN] per-dataset normalization  thetas={all_theta}", flush=True)
+    elif len(all_ev) > 1:
         norm = Normalization.from_datasets(
             [(ev, sp["train"]) for ev, sp in zip(all_ev, splits)],
-            theta_deg=all_theta[0])
-        print(f"[GNN] multi-domain normalization  thetas={all_theta}", flush=True)
+            theta_degs=all_theta)
+        norms = [copy.copy(norm) for _ in all_theta]
+        for n, theta in zip(norms, all_theta):
+            n.theta_deg = theta
+        print(f"[GNN] shared normalization  thetas={all_theta}", flush=True)
     else:
         norm = Normalization.from_arrays(
             all_ev[0], train_idx=splits[0]["train"],
             theta_deg=all_theta[0], tmax_ns=args.tmax)
+        norms = [norm]
     cluster_select = not args.no_cluster_select
     tc_anchor = not args.no_tc_anchor
     anchor_name = "TC-centroid" if tc_anchor else "median(x)"
@@ -214,9 +228,7 @@ def main():
 
     def make_ds(split_key):
         datasets = []
-        for ev, sp, a, b, theta in zip(all_ev, splits, all_a, all_b, all_theta):
-            ds_norm = copy.copy(norm)
-            ds_norm.theta_deg = theta
+        for ev, sp, a, b, ds_norm in zip(all_ev, splits, all_a, all_b, norms):
             datasets.append(HitDataset(ev, sp[split_key], a, b, ds_norm,
                                        detector_shift_mm=detector_shift,
                                        tc_anchor=tc_anchor,
@@ -331,7 +343,10 @@ def main():
     np.savez_compressed(npz_path, y_pred=preds_track, y_true=track_icepts,
                         domain=domain_test, history=np.array(history))
     torch.save(model.state_dict(), pt_path)
-    norm.save(norm_path)
+    if per_dataset_norm:
+        Normalization.save_list(norms, norm_path, names=args.datasets)
+    else:
+        norm.save(norm_path)
     print(f"[GNN] saved: {npz_path.name}  {pt_path.name}  {norm_path.name}", flush=True)
 
 if __name__ == "__main__":
