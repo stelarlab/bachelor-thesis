@@ -8,4 +8,4 @@ matplotlib
 scipy
 tqdm
 pyyaml
-graphviz
+# optional: graphviz (only for analysis/analyse_xgb_tails.py tree images)

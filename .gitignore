@@ -5,4 +5,3 @@ __pycache__/
 *.npz
 .DS_Store
 outputs/
-*.bundle
