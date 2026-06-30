@@ -186,7 +186,9 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Batch] device = {device}", flush=True)
 
-    norm  = Normalization.load(args.norm)
+    norm_loaded = Normalization.load(args.norm)
+    norm_is_list = isinstance(norm_loaded, list)
+    norm_default = norm_loaded[0] if norm_is_list else norm_loaded
     state = torch.load(args.model, map_location="cpu")
     n_strip_feats  = state["strip_encoder.0.weight"].shape[1]
     n_global_feats = state["global_proj.weight"].shape[1]
@@ -198,12 +200,18 @@ def main():
     model.load_state_dict(state)
     print(f"[Batch] model: {n_strip_feats} strip feats  {n_global_feats} global feats  "
           f"d={d_model}  heads={n_heads}  layers={n_layers}", flush=True)
+    if norm_is_list:
+        print(f"[Batch] per-dataset norm detected ({len(norm_loaded)} datasets)", flush=True)
 
     detector_shift = load_detector_shift(OUT)
 
     results = []
     for cfg in selected:
         try:
+            if norm_is_list:
+                norm = Normalization.load_for_dataset(args.norm, cfg["name"])
+            else:
+                norm = norm_default
             r = eval_dataset(cfg, model, norm, n_strip_feats,
                              device, args.out_prefix, detector_shift,
                              tc_anchor=not args.no_tc_anchor)

@@ -97,7 +97,24 @@ class Normalization:
         )
 
     @classmethod
-    def from_datasets(cls, datasets: list[tuple], theta_deg: float = 29.0) -> "Normalization":
+    def from_datasets(cls, datasets: list[tuple],
+                      theta_degs: list[float] | None = None,
+                      per_dataset: bool = False):
+        """Build normalization(s) from multiple datasets.
+
+        per_dataset=False (default): single shared norm over all data (old behaviour).
+        per_dataset=True: list of per-dataset norms, one per entry in `datasets`.
+        theta_degs: one theta per dataset; falls back to 29.0 if omitted.
+        """
+        if theta_degs is None:
+            theta_degs = [29.0] * len(datasets)
+
+        if per_dataset:
+            return [
+                cls.from_arrays(ev, train_idx=tr, theta_deg=theta)
+                for (ev, tr), theta in zip(datasets, theta_degs)
+            ]
+
         all_x, all_q, all_t, all_sl, all_np, all_ms = [], [], [], [], [], []
         for ev, tr in datasets:
             hx = ev.hits_x[tr]; hq = ev.hits_q[tr]; ht = ev.hits_t[tr]
@@ -121,18 +138,47 @@ class Normalization:
             slope_mean=float(fs.mean()), slope_std=float(fs.std()+1e-9),
             nonprec_mean=float(fn.mean()), nonprec_std=float(fn.std()+1e-9),
             muTPC_slope_mean=float(fm.mean()), muTPC_slope_std=float(fm.std()+1e-9),
-            theta_deg=float(theta_deg), tmax_ns=-1.0,
+            theta_deg=float(theta_degs[0]), tmax_ns=-1.0,
         )
 
     def save(self, path: Path | str) -> None:
         Path(path).write_text(json.dumps(asdict(self), indent=2))
 
     @classmethod
-    def load(cls, path: Path | str) -> "Normalization":
-        d = json.loads(Path(path).read_text())
-        # backwards-compat: old norm files lack muTPC_slope stats
+    def save_list(cls, norms: list["Normalization"], path: Path | str,
+                  names: list[str] | None = None) -> None:
+        """Save a list of per-dataset norms as a JSON array."""
+        entries = [asdict(n) for n in norms]
+        if names:
+            for e, name in zip(entries, names):
+                e["dataset_name"] = name
+        Path(path).write_text(json.dumps(entries, indent=2))
+
+    @classmethod
+    def load(cls, path: Path | str) -> "Normalization | list[Normalization]":
+        """Load norm file. Returns a list if the file contains per-dataset norms."""
+        raw = json.loads(Path(path).read_text())
+        if isinstance(raw, list):
+            return [cls._from_dict(d) for d in raw]
+        return cls._from_dict(raw)
+
+    @classmethod
+    def load_for_dataset(cls, path: Path | str, name: str) -> "Normalization":
+        """Load per-dataset norm by dataset name from a list norm file."""
+        raw = json.loads(Path(path).read_text())
+        if isinstance(raw, list):
+            for d in raw:
+                if d.get("dataset_name") == name:
+                    return cls._from_dict(d)
+            raise KeyError(f"Dataset '{name}' not found in {path}")
+        return cls._from_dict(raw)
+
+    @classmethod
+    def _from_dict(cls, d: dict) -> "Normalization":
+        d = dict(d)
         d.setdefault("muTPC_slope_mean", 0.0)
         d.setdefault("muTPC_slope_std",  1.0)
+        d.pop("dataset_name", None)
         return cls(**d)
 
 
